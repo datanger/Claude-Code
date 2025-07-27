@@ -8,4 +8,6 @@ export const DESCRIPTION = `
 - Returns matching file paths sorted by modification time
 - Use this tool when you need to find files containing specific patterns
 - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead
+- **You must always provide the 'pattern' parameter as a non-empty string. Example: {"pattern": "TODO", "path": "src/"}**
+- If you do not know the pattern, ask the user for clarification before calling this tool.
 `

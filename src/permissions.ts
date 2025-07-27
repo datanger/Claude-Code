@@ -13,6 +13,7 @@ import { AbortError } from './utils/errors.js'
 import { logError } from './utils/log.js'
 import { grantWritePermissionForOriginalDir } from './utils/permissions/filesystem.js'
 import { getCwd } from './utils/state.js'
+import { getProviderConfig } from './utils/provider.js'
 
 // Commands that are known to be safe for execution
 const SAFE_COMMANDS = new Set([
@@ -157,6 +158,22 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
   context,
   _assistantMessage,
 ): Promise<PermissionResult> => {
+  // 检查当前使用的模型对应的提供商
+  const model = context.options.slowAndCapableModel || 'claude-3-5-sonnet-20241022'
+  const providerConfig = getProviderConfig(model)
+  
+  console.log(`🔐 [DEBUG] Permission check - Provider: ${providerConfig.provider}`)
+  console.log(`🔐 [DEBUG] Permission check - Skip permissions: ${providerConfig.skipPermissions}`)
+  
+  // 非 Anthropic 提供商跳过权限检查
+  if (providerConfig.skipPermissions) {
+    console.log(`🔐 [DEBUG] Skipping permissions for ${providerConfig.provider} provider`)
+    return { result: true }
+  }
+  
+  // 跳过所有权限检查 - 添加这行来禁用权限检查
+  return { result: true }
+  
   // If permissions are being skipped, allow all tools
   if (context.options.dangerouslySkipPermissions) {
     return { result: true }

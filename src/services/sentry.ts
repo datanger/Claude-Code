@@ -6,18 +6,19 @@ import { SENTRY_DSN } from '../constants/keys.js'
 import { getGateValues } from './statsig.js'
 import { SESSION_ID } from '../utils/log.js'
 import { getIsGit } from '../utils/git.js'
+import { MACRO } from '../constants/macro.js'
 
 export function initSentry(): void {
   Sentry.init({
     dsn: SENTRY_DSN,
     release: MACRO.VERSION,
-    integrations: [
-      new Sentry.Integrations.Http({ tracing: true }),
-      new Sentry.Integrations.Modules(),
-      new Sentry.Integrations.Console(),
-      new Sentry.Integrations.FunctionToString(),
-      new Sentry.Integrations.LinkedErrors(),
-    ],
+    // integrations: [
+    //   new Integrations.Http({ tracing: true }),
+    //   new Integrations.Modules(),
+    //   new Integrations.Console(),
+    //   new Integrations.FunctionToString(),
+    //   new Integrations.LinkedErrors(),
+    // ],
     // Performance Monitoring
     tracesSampleRate: 1.0, // Capture 100% of transactions
     // Set 'tracePropagationTargets' to control for which URLs distributed tracing should be enabled

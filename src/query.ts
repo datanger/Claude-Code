@@ -14,9 +14,11 @@ import {
   formatSystemPromptWithContext,
   querySonnet,
 } from './services/claude.js'
+import { queryLLM } from './services/llm.js'
 import { logEvent } from './services/statsig.js'
 import { all } from './utils/generators.js'
 import { logError } from './utils/log.js'
+import { debugLog } from './utils/log.js'
 import {
   createAssistantMessage,
   createProgressMessage,
@@ -66,6 +68,7 @@ export type ProgressMessage = {
 export type Message = UserMessage | AssistantMessage | ProgressMessage
 
 const MAX_TOOL_USE_CONCURRENCY = 10
+const MAX_TOOL_USE_ITERATIONS = 10 // 防止无限循环的最大工具调用次数
 
 // Returns a message if we got one, or `null` if the user cancelled
 async function queryWithBinaryFeedback(
@@ -131,11 +134,19 @@ export async function* query(
     m1: AssistantMessage,
     m2: AssistantMessage,
   ) => Promise<BinaryFeedbackResult>,
+  toolUseIterationCount: number = 0, // 添加工具调用循环计数器
 ): AsyncGenerator<Message, void> {
+  // 检查工具调用循环次数，防止无限循环
+  if (toolUseIterationCount >= MAX_TOOL_USE_ITERATIONS) {
+    debugLog(`⚠️ [DEBUG] Tool use iteration limit reached (${MAX_TOOL_USE_ITERATIONS}), stopping to prevent infinite loop`)
+    yield createAssistantMessage(`I've reached the maximum number of tool use iterations (${MAX_TOOL_USE_ITERATIONS}). This prevents infinite loops. Please try a different approach or ask a more specific question.`)
+    return
+  }
+  
   const fullSystemPrompt = formatSystemPromptWithContext(systemPrompt, context)
 
   function getAssistantResponse() {
-    return querySonnet(
+    return queryLLM(
       normalizeMessagesForAPI(messages),
       fullSystemPrompt,
       toolUseContext.options.maxThinkingTokens,
@@ -171,9 +182,15 @@ export async function* query(
   const toolUseMessages = assistantMessage.message.content.filter(
     _ => _.type === 'tool_use',
   )
+  
+  debugLog(`🛠️ [DEBUG] Tool use detection:`)
+  debugLog(`   - Total content items: ${assistantMessage.message.content.length}`)
+  debugLog(`   - Tool use messages found: ${toolUseMessages.length}`)
+  debugLog(`   - Content types: ${assistantMessage.message.content.map(item => item.type).join(', ')}`)
 
   // If there's no more tool use, we're done
   if (!toolUseMessages.length) {
+    debugLog(`✅ [DEBUG] No tool use detected, query() function completed`)
     return
   }
 
@@ -238,6 +255,7 @@ export async function* query(
     canUseTool,
     toolUseContext,
     getBinaryFeedbackResponse,
+    toolUseIterationCount + 1, // 递归调用时增加计数器
   )
 }
 

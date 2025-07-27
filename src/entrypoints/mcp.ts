@@ -25,6 +25,7 @@ import { Tool } from '../Tool.js'
 import { Command } from '../commands.js'
 import review from '../commands/review.js'
 import { lastX } from '../utils/generators.js'
+import { MACRO } from '../constants/macro.js'
 
 type ToolInput = z.infer<typeof ToolSchema.shape.inputSchema>
 

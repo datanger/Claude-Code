@@ -114,6 +114,7 @@ export type GlobalConfig = {
   oauthAccount?: AccountInfo
   iterm2KeyBindingInstalled?: boolean // Legacy - keeping for backward compatibility
   shiftEnterKeyBindingInstalled?: boolean
+  openaiApiKey?: string // OpenAI API key for the user when no environment variable is set, set via oauth (TODO: rename)
 }
 
 export const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
@@ -238,6 +239,17 @@ export function getAnthropicApiKey(): null | string {
   }
 
   return null
+}
+
+export function getOpenAIApiKey(): null | string {
+  // 优先使用环境变量
+  if (process.env.OPENAI_API_KEY) {
+    return process.env.OPENAI_API_KEY
+  }
+
+  // 如果没有环境变量，可以从配置中获取
+  const config = getGlobalConfig()
+  return config.openaiApiKey ?? null
 }
 
 export function normalizeApiKeyForConfig(apiKey: string): string {

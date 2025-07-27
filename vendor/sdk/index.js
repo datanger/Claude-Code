@@ -156,7 +156,7 @@ Anthropic.Messages = messages_1.Messages;
 Anthropic.Models = models_1.Models;
 Anthropic.ModelInfosPage = models_1.ModelInfosPage;
 Anthropic.Beta = beta_1.Beta;
-exports.HUMAN_PROMPT = Anthropic.HUMAN_PROMPT, exports.AI_PROMPT = Anthropic.AI_PROMPT;
+exports. HUMAN_PROMPT = Anthropic.HUMAN_PROMPT, exports.AI_PROMPT = Anthropic.AI_PROMPT;
 var uploads_1 = require("./uploads.js");
 Object.defineProperty(exports, "toFile", { enumerable: true, get: function () { return uploads_1.toFile; } });
 Object.defineProperty(exports, "fileFromPath", { enumerable: true, get: function () { return uploads_1.fileFromPath; } });

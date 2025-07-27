@@ -11,6 +11,7 @@ import {
 } from '../utils/autoUpdater.js'
 import { useInterval } from '../hooks/useInterval.js'
 import { logEvent } from '../services/statsig.js'
+import { MACRO } from '../constants/macro.js'
 
 type Props = {
   debug: boolean

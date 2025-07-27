@@ -15,6 +15,7 @@ import { getTheme } from './utils/theme.js'
 import { RELEASE_NOTES } from './constants/releaseNotes.js'
 import { gt } from 'semver'
 import { isDirEmpty } from './utils/file.js'
+import { MACRO } from './constants/macro.js'
 
 // Function to mark onboarding as complete
 export function markProjectOnboardingComplete(): void {

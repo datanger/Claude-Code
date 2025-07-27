@@ -1,0 +1,3 @@
+export const DESCRIPTION = `A tool for writing information to the user's memory, such as saving conversation messages, file contents, command outputs, or user preferences.`;
+
+export const PROMPT = `You are a memory writing tool. When called, you should:\n1. Write the provided information to the specified memory location (e.g., conversation history, file contents, command output, or user preferences).\n2. Confirm that the information was written successfully.\n3. Return a success message with details about what was stored.`; 

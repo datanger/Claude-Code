@@ -7,6 +7,7 @@ import { isAbsolute, resolve, join } from 'path'
 import { logError } from './log.js'
 import * as os from 'os'
 import { logEvent } from '../services/statsig.js'
+import { debugLog } from './log'
 
 type ExecResult = {
   stdout: string
@@ -39,7 +40,7 @@ const SHELL_CONFIGS: Record<string, string> = {
 export class PersistentShell {
   private commandQueue: QueuedCommand[] = []
   private isExecuting: boolean = false
-  private shell: ChildProcess
+  private shell: ChildProcess | null = null
   private isAlive: boolean = true
   private commandInterrupted: boolean = false
   private statusFile: string
@@ -50,58 +51,89 @@ export class PersistentShell {
   private binShell: string
 
   constructor(cwd: string) {
-    this.binShell = process.env.SHELL || '/bin/bash'
-    this.shell = spawn(this.binShell, ['-l'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      cwd,
-      env: {
-        ...process.env,
-        GIT_EDITOR: 'true',
-      },
-    })
+    // Windows 系统检测
+    if (process.platform === 'win32') {
+      // Windows 系统使用 cmd 或 PowerShell
+      this.binShell = process.env.SHELL || 'cmd.exe'
+      debugLog(`🖥️ [DEBUG] Windows system detected, using shell: ${this.binShell}`)
+      
+      // Windows 系统不需要创建 shell 进程，直接使用 execSync
+      this.shell = null as any
+      this.cwd = cwd
+      
+      // 创建临时文件
+      const id = Math.floor(Math.random() * 0x10000)
+        .toString(16)
+        .padStart(4, '0')
+      
+      this.statusFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.STATUS
+      this.stdoutFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.STDOUT
+      this.stderrFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.STDERR
+      this.cwdFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.CWD
+      
+      // 初始化 CWD 文件
+      fs.writeFileSync(this.cwdFile, cwd)
+      
+    } else {
+      // Unix 系统使用 bash
+      this.binShell = process.env.SHELL || '/bin/bash'
+      debugLog(`🐧 [DEBUG] Unix/Linux system detected, using shell: ${this.binShell}`)
+      
+      // 根据操作系统调整 spawn 参数
+      const spawnArgs = ['-l'] // Unix bash 参数
+      
+      this.shell = spawn(this.binShell, spawnArgs, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd,
+        env: {
+          ...process.env,
+          GIT_EDITOR: 'true',
+        },
+      })
 
-    this.cwd = cwd
+      this.cwd = cwd
 
-    this.shell.on('exit', (code, signal) => {
-      if (code) {
-        // TODO: It would be nice to alert the user that shell crashed
-        logError(`Shell exited with code ${code} and signal ${signal}`)
-        logEvent('persistent_shell_exit', {
-          code: code?.toString() || 'null',
-          signal: signal || 'null',
-        })
-      }
-      for (const file of [
-        this.statusFile,
-        this.stdoutFile,
-        this.stderrFile,
-        this.cwdFile,
-      ]) {
-        if (fs.existsSync(file)) {
-          fs.unlinkSync(file)
+      this.shell.on('exit', (code, signal) => {
+        if (code) {
+          // TODO: It would be nice to alert the user that shell crashed
+          logError(`Shell exited with code ${code} and signal ${signal}`)
+          logEvent('persistent_shell_exit', {
+            code: code?.toString() || 'null',
+            signal: signal || 'null',
+          })
         }
+        for (const file of [
+          this.statusFile,
+          this.stdoutFile,
+          this.stderrFile,
+          this.cwdFile,
+        ]) {
+          if (fs.existsSync(file)) {
+            fs.unlinkSync(file)
+          }
+        }
+        this.isAlive = false
+      })
+
+      const id = Math.floor(Math.random() * 0x10000)
+        .toString(16)
+        .padStart(4, '0')
+
+      this.statusFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.STATUS
+      this.stdoutFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.STDOUT
+      this.stderrFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.STDERR
+      this.cwdFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.CWD
+      for (const file of [this.statusFile, this.stdoutFile, this.stderrFile]) {
+        fs.writeFileSync(file, '')
       }
-      this.isAlive = false
-    })
-
-    const id = Math.floor(Math.random() * 0x10000)
-      .toString(16)
-      .padStart(4, '0')
-
-    this.statusFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.STATUS
-    this.stdoutFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.STDOUT
-    this.stderrFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.STDERR
-    this.cwdFile = TEMPFILE_PREFIX + id + FILE_SUFFIXES.CWD
-    for (const file of [this.statusFile, this.stdoutFile, this.stderrFile]) {
-      fs.writeFileSync(file, '')
-    }
-    // Initialize CWD file with initial directory
-    fs.writeFileSync(this.cwdFile, cwd)
-    const configFile = SHELL_CONFIGS[this.binShell]
-    if (configFile) {
-      const configFilePath = join(homedir(), configFile)
-      if (existsSync(configFilePath)) {
-        this.sendToShell(`source ${configFilePath}`)
+      // Initialize CWD file with initial directory
+      fs.writeFileSync(this.cwdFile, cwd)
+      const configFile = SHELL_CONFIGS[this.binShell]
+      if (configFile) {
+        const configFilePath = join(homedir(), configFile)
+        if (existsSync(configFilePath)) {
+          this.sendToShell(`source ${configFilePath}`)
+        }
       }
     }
   }
@@ -123,34 +155,69 @@ export class PersistentShell {
   }
 
   killChildren() {
-    const parentPid = this.shell.pid
-    try {
-      const childPids = execSync(`pgrep -P ${parentPid}`)
-        .toString()
-        .trim()
-        .split('\n')
-        .filter(Boolean) // Filter out empty strings
+    const parentPid = this.shell?.pid || 0 // Use optional chaining
+    
+    if (process.platform === 'win32') {
+      // Windows 系统使用 tasklist 和 taskkill
+      try {
+        const childPids = execSync(`tasklist /FI "IMAGENAME eq cmd.exe" /FO CSV /NH`)
+          .toString()
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map(line => {
+            const parts = line.split(',')
+            return parts[1]?.replace(/"/g, '') // 移除引号
+          })
+          .filter(pid => pid && pid !== parentPid.toString())
 
-      if (childPids.length > 0) {
-        logEvent('persistent_shell_command_interrupted', {
-          numChildProcesses: childPids.length.toString(),
-        })
-      }
-
-      childPids.forEach(pid => {
-        try {
-          process.kill(Number(pid), 'SIGTERM')
-        } catch (error) {
-          logError(`Failed to kill process ${pid}: ${error}`)
-          logEvent('persistent_shell_kill_process_error', {
-            error: (error as Error).message.substring(0, 10),
+        if (childPids.length > 0) {
+          logEvent('persistent_shell_command_interrupted', {
+            numChildProcesses: childPids.length.toString(),
           })
         }
-      })
-    } catch {
-      // pgrep returns non-zero when no processes are found - this is expected
-    } finally {
-      this.commandInterrupted = true
+
+        childPids.forEach(pid => {
+          try {
+            execSync(`taskkill /PID ${pid} /F`)
+          } catch (error) {
+            logError(`Failed to kill process ${pid}: ${error}`)
+            logEvent('persistent_shell_kill_process_error', {
+              error: (error as Error).message.substring(0, 10),
+            })
+          }
+        })
+      } catch (error) {
+        logError(`Failed to get child processes on Windows: ${error}`)
+      }
+    } else {
+      // Unix 系统使用 pgrep 和 kill
+      try {
+        const childPids = execSync(`pgrep -P ${parentPid}`)
+          .toString()
+          .trim()
+          .split('\n')
+          .filter(Boolean) // Filter out empty strings
+
+        if (childPids.length > 0) {
+          logEvent('persistent_shell_command_interrupted', {
+            numChildProcesses: childPids.length.toString(),
+          })
+        }
+
+        childPids.forEach(pid => {
+          try {
+            process.kill(Number(pid), 'SIGTERM')
+          } catch (error) {
+            logError(`Failed to kill process ${pid}: ${error}`)
+            logEvent('persistent_shell_kill_process_error', {
+              error: (error as Error).message.substring(0, 10),
+            })
+          }
+        })
+      } catch (error) {
+        logError(`Failed to get child processes on Unix: ${error}`)
+      }
     }
   }
 
@@ -227,11 +294,79 @@ export class PersistentShell {
      * - This sequence eliminates race conditions between exit code capture and CWD updates
      * - The pwd() method reads the CWD file directly for current directory info
      */
-    const quotedCommand = shellquote.quote([command])
+    
+    if (process.platform === 'win32') {
+      // Windows 系统使用简化的执行方式
+      return this.execWindows_(command, timeout)
+    } else {
+      // Unix 系统使用原有的执行方式
+      return this.execUnix_(command, timeout)
+    }
+  }
+
+  private async execWindows_(command: string, timeout?: number): Promise<ExecResult> {
+    const commandTimeout = timeout || DEFAULT_TIMEOUT
+    this.commandInterrupted = false
+    
+    return new Promise<ExecResult>(resolve => {
+      // 使用 execSync 直接执行命令
+      let stdout = ''
+      let stderr = ''
+      let code = 0
+      
+      try {
+        const result = execSync(command, {
+          encoding: 'utf8',
+          timeout: commandTimeout,
+          cwd: this.cwd,
+        })
+        stdout = result
+        code = 0
+      } catch (error: any) {
+        if (error.status !== undefined) {
+          code = error.status
+          stdout = error.stdout || ''
+          stderr = error.stderr || ''
+        } else {
+          code = 1
+          stderr = error.message || 'Unknown error'
+        }
+      }
+      
+      resolve({
+        stdout,
+        stderr,
+        code,
+        interrupted: this.commandInterrupted,
+      })
+    })
+  }
+
+  private async execUnix_(command: string, timeout?: number): Promise<ExecResult> {
+    // Windows 和 Unix 系统的命令处理逻辑
+    let quotedCommand: string
+    let syntaxCheckCommand: string
+    let commandParts: string[]
+    
+    // Unix 系统使用 bash 语法
+    quotedCommand = shellquote.quote([command])
+    syntaxCheckCommand = `${this.binShell} -n -c ${quotedCommand}`
+    
+    // Unix 命令执行逻辑
+    commandParts = [
+      // 1. Execute the main command with redirections
+      `eval ${quotedCommand} < /dev/null > ${this.stdoutFile} 2> ${this.stderrFile}`,
+      // 2. Capture exit code immediately after command execution to avoid losing it
+      `EXEC_EXIT_CODE=$?`,
+      // 3. Update CWD file
+      `pwd > ${this.cwdFile}`,
+      // 4. Write the preserved exit code to status file to avoid race with pwd
+      `echo $EXEC_EXIT_CODE > ${this.statusFile}`,
+    ]
 
     // Check the syntax of the command
     try {
-      execSync(`${this.binShell} -n -c ${quotedCommand}`, {
+      execSync(syntaxCheckCommand, {
         stdio: 'ignore',
         timeout: 1000,
       })
@@ -258,22 +393,6 @@ export class PersistentShell {
       fs.writeFileSync(this.stdoutFile, '')
       fs.writeFileSync(this.stderrFile, '')
       fs.writeFileSync(this.statusFile, '')
-      // Break up the command sequence for clarity using an array of commands
-      const commandParts = []
-
-      // 1. Execute the main command with redirections
-      commandParts.push(
-        `eval ${quotedCommand} < /dev/null > ${this.stdoutFile} 2> ${this.stderrFile}`,
-      )
-
-      // 2. Capture exit code immediately after command execution to avoid losing it
-      commandParts.push(`EXEC_EXIT_CODE=$?`)
-
-      // 3. Update CWD file
-      commandParts.push(`pwd > ${this.cwdFile}`)
-
-      // 4. Write the preserved exit code to status file to avoid race with pwd
-      commandParts.push(`echo $EXEC_EXIT_CODE > ${this.statusFile}`)
 
       // Send the combined commands as a single operation to maintain atomicity
       this.sendToShell(commandParts.join('\n'))
@@ -328,8 +447,13 @@ export class PersistentShell {
   }
 
   private sendToShell(command: string) {
+    // Windows 系统不需要 sendToShell
+    if (process.platform === 'win32' || !this.shell) {
+      return
+    }
+    
     try {
-      this.shell!.stdin!.write(command + '\n')
+      this.shell.stdin!.write(command + '\n')
     } catch (error) {
       const errorString =
         error instanceof Error
@@ -366,7 +490,9 @@ export class PersistentShell {
   }
 
   close(): void {
-    this.shell!.stdin!.end()
-    this.shell.kill()
+    if (this.shell) {
+      this.shell.stdin!.end()
+      this.shell.kill()
+    }
   }
 }

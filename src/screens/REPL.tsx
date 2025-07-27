@@ -77,6 +77,9 @@ type Props = {
   mcpClients?: WrappedClient[]
   // Flag to indicate if current model is default
   isDefaultModel?: boolean
+  // LLM provider and model
+  provider?: string
+  model?: string
 }
 
 export type BinaryFeedbackContext = {
@@ -98,6 +101,8 @@ export function REPL({
   initialMessages,
   mcpClients = [],
   isDefaultModel = true,
+  provider,
+  model,
 }: Props): React.ReactNode {
   // TODO: probably shouldn't re-read config from file synchronously on every keystroke
   const verbose = verboseFromCLI ?? getGlobalConfig().verbose
@@ -212,7 +217,8 @@ export function REPL({
     const abortController = new AbortController()
     setAbortController(abortController)
 
-    const model = await getSlowAndCapableModel()
+    // 使用传入的 model 参数或默认模型
+    const finalModel = model || await getSlowAndCapableModel()
     const newMessages = await processUserInput(
       initialPrompt,
       'prompt',
@@ -225,7 +231,7 @@ export function REPL({
           messageLogName,
           tools,
           verbose,
-          slowAndCapableModel: model,
+          slowAndCapableModel: finalModel,
           maxThinkingTokens: 0,
         },
         messageId: getLastAssistantMessageId(messages),
@@ -253,11 +259,10 @@ export function REPL({
         return
       }
 
-      const [systemPrompt, context, model, maxThinkingTokens] =
+      const [systemPrompt, context, maxThinkingTokens] =
         await Promise.all([
           getSystemPrompt(),
           getContext(),
-          getSlowAndCapableModel(),
           getMaxThinkingTokens([...messages, ...newMessages]),
         ])
 
@@ -272,7 +277,7 @@ export function REPL({
             forkNumber,
             messageLogName,
             tools,
-            slowAndCapableModel: model,
+            slowAndCapableModel: finalModel,
             verbose,
             dangerouslySkipPermissions,
             maxThinkingTokens,
@@ -324,11 +329,12 @@ export function REPL({
       return
     }
 
-    const [systemPrompt, context, model, maxThinkingTokens] = await Promise.all(
+    // 使用传入的 model 参数或默认模型
+    const finalModel = model || await getSlowAndCapableModel()
+    const [systemPrompt, context, maxThinkingTokens] = await Promise.all(
       [
         getSystemPrompt(),
         getContext(),
-        getSlowAndCapableModel(),
         getMaxThinkingTokens([...messages, lastMessage]),
       ],
     )
@@ -345,7 +351,7 @@ export function REPL({
           forkNumber,
           messageLogName,
           tools,
-          slowAndCapableModel: model,
+          slowAndCapableModel: finalModel,
           verbose,
           dangerouslySkipPermissions,
           maxThinkingTokens,
@@ -639,6 +645,7 @@ export function REPL({
                   setForkConvoWithMessagesOnTheNextRender
                 }
                 readFileTimestamps={readFileTimestamps.current}
+                model={model}
               />
             </>
           )}

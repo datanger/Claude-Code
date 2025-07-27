@@ -1,0 +1,3 @@
+export const DESCRIPTION = `A tool for reading information from the user's memory, such as conversation history, file contents, command outputs, or user preferences.`;
+
+export const PROMPT = `You are a memory reading tool. When called, you should:\n1. Read the requested information from memory (e.g., conversation history, file contents, command output, or user preferences).\n2. Return the information in a clear, organized format.\n3. If the information is not found, indicate that clearly.`; 

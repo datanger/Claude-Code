@@ -1,0 +1,54 @@
+{
+  "name": "claude-code-dev",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Development version of Claude Code",
+  "main": "src/entrypoints/cli.tsx",
+  "scripts": {
+    "start": "tsx src/entrypoints/cli.tsx",
+    "dev": "tsx src/entrypoints/cli.tsx",
+    "build": "tsc",
+    "test": "echo \"No tests specified\""
+  },
+  "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.23.0",
+    "@anthropic-ai/sdk": "^0.36.3",
+    "@anthropic-ai/vertex-sdk": "^0.12.1",
+    "@commander-js/extra-typings": "^11.1.0",
+    "@inkjs/ui": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@sentry/node": "^8.0.0",
+    "@statsig/js-client": "^3.20.2",
+    "@types/shell-quote": "^1.7.5",
+    "ansi-escapes": "^4.3.2",
+    "chalk": "^5.0.0",
+    "cli-highlight": "^2.1.11",
+    "cli-table3": "^0.6.5",
+    "commander": "^11.1.0",
+    "dotenv": "^17.2.1",
+    "env-paths": "^3.0.0",
+    "glob": "^11.0.3",
+    "ink": "^5.0.0",
+    "ink-link": "^4.1.0",
+    "lodash-es": "^4.17.21",
+    "marked": "^16.1.1",
+    "openai": "^5.10.2",
+    "react": "^18.2.0",
+    "shell-quote": "^1.8.3",
+    "spawn-rx": "^5.1.2",
+    "statsig-node": "^5.0.0",
+    "zod": "^3.22.0",
+    "zod-to-json-schema": "^3.24.6"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "^4.17.12",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.2.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.20.3",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,5 +1,6 @@
 import type { Command } from '../commands.js'
 import { RELEASE_NOTES } from '../constants/releaseNotes.js'
+import { MACRO } from '../constants/macro.js'
 
 const releaseNotes: Command = {
   description: 'Show release notes for the current or specified version',

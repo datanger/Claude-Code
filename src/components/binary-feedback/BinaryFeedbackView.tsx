@@ -4,7 +4,7 @@ import { Box, Text, useInput } from 'ink'
 import Link from 'ink-link'
 import React, { useState } from 'react'
 import { getTheme } from '../../utils/theme.js'
-import { Select } from '../CustomSelect/index.js'
+import { CustomSelect } from '../CustomSelect/index.js'
 import type { Tool } from '../../Tool.js'
 import type { NormalizedMessage } from '../../utils/messages.js'
 import { BinaryFeedbackOption } from './BinaryFeedbackOption.js'
@@ -150,7 +150,7 @@ export function BinaryFeedbackView({
         </Box>
         <Box flexDirection="column" paddingTop={1} paddingX={1}>
           <Text>How do you want to proceed?</Text>
-          <Select
+          <CustomSelect
             options={getOptions()}
             onFocus={setFocus}
             focusValue={focusValue}

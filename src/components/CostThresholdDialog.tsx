@@ -1,6 +1,6 @@
 import { Box, Text, useInput } from 'ink'
 import React from 'react'
-import { Select } from './CustomSelect/index.js'
+import { CustomSelect } from './CustomSelect/index.js'
 import { getTheme } from '../utils/theme.js'
 import Link from './Link.js'
 
@@ -31,7 +31,7 @@ export function CostThresholdDialog({ onDone }: Props): React.ReactNode {
         <Link url="https://docs.anthropic.com/s/claude-code-cost" />
       </Box>
       <Box>
-        <Select
+        <CustomSelect
           options={[
             {
               value: 'ok',

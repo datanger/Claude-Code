@@ -11,7 +11,7 @@ import {
 } from '../PermissionRequest.js'
 import { PermissionRequestTitle } from '../PermissionRequestTitle.js'
 import { logUnaryPermissionEvent } from '../utils.js'
-import { Select } from '../../CustomSelect/select.js'
+import { CustomSelect } from '../../CustomSelect/index.js'
 import { toolUseOptions } from '../toolUseOptions.js'
 
 type Props = {
@@ -56,7 +56,7 @@ export function BashPermissionRequest({
 
       <Box flexDirection="column">
         <Text>Do you want to proceed?</Text>
-        <Select
+        <CustomSelect
           options={toolUseOptions({ toolUseConfirm, command })}
           onChange={newValue => {
             switch (newValue) {

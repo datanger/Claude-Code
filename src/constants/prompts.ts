@@ -8,6 +8,7 @@ import { getCwd } from '../utils/state.js'
 import { PRODUCT_NAME } from './product.js'
 import { BashTool } from '../tools/BashTool/BashTool.js'
 import { getSlowAndCapableModel } from '../utils/model.js'
+import { MACRO } from './macro.js'
 
 export function getCLISyspromptPrefix(): string {
   return `You are ${PRODUCT_NAME}, Anthropic's official CLI for Claude.`

@@ -1,6 +1,7 @@
 #!/usr/bin/env -S node --no-warnings=ExperimentalWarning --enable-source-maps
 import { initSentry } from '../services/sentry.js'
 import { PRODUCT_NAME } from '../constants/product.js'
+import { MACRO } from '../constants/macro.js'
 initSentry() // Initialize Sentry as early as possible
 
 // XXX: Without this line (and the Object.keys, even though it seems like it does nothing!),
@@ -67,7 +68,7 @@ import {
 import { handleMcprcServerApprovals } from '../services/mcpServerApproval.js'
 import { checkGate, initializeStatsig, logEvent } from '../services/statsig.js'
 import { getExampleCommands } from '../utils/exampleCommands.js'
-import { cursorShow } from 'ansi-escapes'
+import ansiEscapes from 'ansi-escapes'
 import {
   getLatestVersion,
   installGlobalPackage,
@@ -80,6 +81,8 @@ import { clearTerminal } from '../utils/terminal.js'
 import { showInvalidConfigDialog } from '../components/InvalidConfigDialog.js'
 import { ConfigParseError } from '../utils/errors.js'
 import { grantReadPermissionForOriginalDir } from '../utils/permissions/filesystem.js'
+import { getProviderConfig } from '../utils/provider.js'
+import { debugLog } from '../utils/log.js'
 
 export function completeOnboarding(): void {
   const config = getGlobalConfig()
@@ -99,26 +102,26 @@ async function showSetupScreens(
   }
 
   const config = getGlobalConfig()
-  if (
-    !config.theme ||
-    !config.hasCompletedOnboarding // always show onboarding at least once
-  ) {
-    await clearTerminal()
-    await new Promise<void>(resolve => {
-      render(
-        <Onboarding
-          onDone={async () => {
-            completeOnboarding()
-            await clearTerminal()
-            resolve()
-          }}
-        />,
-        {
-          exitOnCtrlC: false,
-        },
-      )
-    })
-  }
+  // if (
+  //   !config.theme ||
+  //   !config.hasCompletedOnboarding // always show onboarding at least once
+  // ) {
+  //   await clearTerminal()
+  //   await new Promise<void>(resolve => {
+  //     render(
+  //       <Onboarding
+  //         onDone={async () => {
+  //           completeOnboarding()
+  //           await clearTerminal()
+  //           resolve()
+  //         }}
+  //       />,
+  //       {
+  //         exitOnCtrlC: false,
+  //       },
+  //     )
+  //   })
+  // }
 
   // Check for custom API key (only allowed for ants)
   if (process.env.ANTHROPIC_API_KEY && process.env.USER_TYPE === 'ant') {
@@ -146,18 +149,19 @@ async function showSetupScreens(
 
   // In non-interactive or dangerously-skip-permissions mode, skip the trust dialog
   if (!print && !dangerouslySkipPermissions) {
-    if (!checkHasTrustDialogAccepted()) {
-      await new Promise<void>(resolve => {
-        const onDone = () => {
-          // Grant read permission to the current working directory
-          grantReadPermissionForOriginalDir()
-          resolve()
-        }
-        render(<TrustDialog onDone={onDone} />, {
-          exitOnCtrlC: false,
-        })
-      })
-    }
+    // 注释掉信任对话框检查
+    // if (!checkHasTrustDialogAccepted()) {
+    //   await new Promise<void>(resolve => {
+    //     const onDone = () => {
+    //       // Grant read permission to the current working directory
+    //       grantReadPermissionForOriginalDir()
+    //       resolve()
+    //     }
+    //     render(<TrustDialog onDone={onDone} />, {
+    //       exitOnCtrlC: false,
+    //     })
+    //   })
+    // }
 
     // After trust dialog, check for any mcprc servers that need approval
     if (process.env.USER_TYPE === 'ant') {
@@ -198,18 +202,19 @@ async function setup(
       process.exit(1)
     }
 
+    // 注释掉 Docker 和互联网访问检查
     // Only await if --dangerously-skip-permissions is set
-    const [isDocker, hasInternet] = await Promise.all([
-      env.getIsDocker(),
-      env.hasInternetAccess(),
-    ])
+    // const [isDocker, hasInternet] = await Promise.all([
+    //   env.getIsDocker(),
+    //   env.hasInternetAccess(),
+    // ])
 
-    if (!isDocker || hasInternet) {
-      console.error(
-        `--dangerously-skip-permissions can only be used in Docker containers with no internet access but got Docker: ${isDocker} and hasInternet: ${hasInternet}`,
-      )
-      process.exit(1)
-    }
+    // if (!isDocker || hasInternet) {
+    //   console.error(
+    //     `--dangerously-skip-permissions can only be used in Docker containers with no internet access but got Docker: ${isDocker} and hasInternet: ${hasInternet}`,
+    //   )
+    //   process.exit(1)
+    // }
   }
 
   if (process.env.NODE_ENV === 'test') {
@@ -260,12 +265,12 @@ async function setup(
 
   // Check auto-updater permissions
   const autoUpdaterStatus = globalConfig.autoUpdaterStatus ?? 'not_configured'
-  if (autoUpdaterStatus === 'not_configured') {
-    logEvent('tengu_setup_auto_updater_not_configured', {})
-    await new Promise<void>(resolve => {
-      render(<Doctor onDone={() => resolve()} />)
-    })
-  }
+  // if (autoUpdaterStatus === 'not_configured') {
+  //   logEvent('tengu_setup_auto_updater_not_configured', {})
+  //   await new Promise<void>(resolve => {
+  //     render(<Doctor onDone={() => resolve()} />)
+  //   })
+  // }
 }
 
 async function main() {
@@ -354,6 +359,16 @@ ${commandList}`,
       'Skip all permission checks. Only works in Docker containers with no internet access. Will crash otherwise.',
       () => true,
     )
+    .option(
+      '--provider <provider>',
+      'Specify LLM provider (anthropic, openai, deepseek)',
+      String,
+    )
+    .option(
+      '--model <model>',
+      'Specify LLM model (e.g., claude-3-5-sonnet, gpt-4, deepseek-chat)',
+      String,
+    )
     .action(
       async (
         prompt,
@@ -364,8 +379,13 @@ ${commandList}`,
           enableArchitect,
           print,
           dangerouslySkipPermissions,
+          provider,
+          model,
         },
       ) => {
+        if (debug) {
+          process.env.DEBUG = 'true'
+        }
         await showSetupScreens(dangerouslySkipPermissions, print)
         logEvent('tengu_init', {
           entrypoint: 'claude',
@@ -375,6 +395,8 @@ ${commandList}`,
           verbose: verbose?.toString() ?? 'false',
           debug: debug?.toString() ?? 'false',
           print: print?.toString() ?? 'false',
+          provider: provider || 'auto',
+          model: model || 'auto',
         })
         await setup(cwd, dangerouslySkipPermissions)
 
@@ -397,6 +419,11 @@ ${commandList}`,
           }
 
           addToHistory(inputPrompt)
+          // 在首次调用 ask/queryLLM 前输出 provider debug 信息
+          const providerConfig = getProviderConfig(model)
+          debugLog(`🤖 [DEBUG] queryLLM() - Provider: ${providerConfig.provider}`)
+          debugLog(`🔧 [DEBUG] queryLLM() - Model: ${providerConfig.model}`)
+          debugLog(`🔐 [DEBUG] queryLLM() - Skip permissions: ${providerConfig.skipPermissions}`)
           const { resultText: response } = await ask({
             commands,
             hasPermissionsToUseTool,
@@ -405,6 +432,8 @@ ${commandList}`,
             cwd,
             tools,
             dangerouslySkipPermissions,
+            provider,
+            model,
           })
           console.log(response)
           process.exit(0)
@@ -423,6 +452,8 @@ ${commandList}`,
               dangerouslySkipPermissions={dangerouslySkipPermissions}
               mcpClients={mcpClients}
               isDefaultModel={isDefaultModel}
+              provider={provider}
+              model={model}
             />,
             renderContext,
           )
@@ -1037,7 +1068,7 @@ function resetCursor() {
     : process.stdout.isTTY
       ? process.stdout
       : undefined
-  terminal?.write(`\u001B[?25h${cursorShow}`)
+  terminal?.write(`\u001B[?25h${ansiEscapes.cursorShow}`)
 }
 
 main()

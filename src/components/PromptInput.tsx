@@ -54,6 +54,7 @@ type Props = {
     forkConvoWithMessages: Message[],
   ) => void
   readFileTimestamps: { [filename: string]: number }
+  model?: string
 }
 
 function getPastedTextPrompt(text: string): string {
@@ -85,6 +86,7 @@ function PromptInput({
   onShowMessageSelector,
   setForkConvoWithMessagesOnTheNextRender,
   readFileTimestamps,
+  model,
 }: Props): React.ReactNode {
   const [isAutoUpdating, setIsAutoUpdating] = useState(false)
   const [exitMessage, setExitMessage] = useState<{
@@ -194,7 +196,8 @@ function PromptInput({
 
     const abortController = new AbortController()
     setAbortController(abortController)
-    const model = await getSlowAndCapableModel()
+    // 使用传入的 model 参数或默认模型
+    const finalModel = model || await getSlowAndCapableModel()
     const messages = await processUserInput(
       finalInput,
       mode,
@@ -206,7 +209,7 @@ function PromptInput({
           messageLogName,
           tools,
           verbose,
-          slowAndCapableModel: model,
+          slowAndCapableModel: finalModel,
           maxThinkingTokens: 0,
         },
         messageId: undefined,

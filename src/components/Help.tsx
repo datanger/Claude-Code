@@ -4,6 +4,7 @@ import * as React from 'react'
 import { Box, Text, useInput } from 'ink'
 import { getTheme } from '../utils/theme.js'
 import { PressEnterToContinue } from './PressEnterToContinue.js'
+import { MACRO } from '../constants/macro.js'
 
 export function Help({
   commands,

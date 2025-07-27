@@ -17,6 +17,7 @@ import { SESSION_ID } from '../utils/log.js'
 import { getBetas } from '../utils/betas.js'
 import { getIsGit } from '../utils/git.js'
 import { getSlowAndCapableModel } from '../utils/model.js'
+import { MACRO } from '../constants/macro.js'
 
 const gateValues: Record<string, boolean> = {}
 let client: StatsigClient | null = null

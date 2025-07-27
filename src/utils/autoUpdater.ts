@@ -17,6 +17,7 @@ import { accessSync } from 'fs'
 import { CLAUDE_BASE_DIR } from './env.js'
 import { logEvent, getDynamicConfig } from '../services/statsig.js'
 import { lt } from 'semver'
+import { MACRO } from '../constants/macro.js'
 
 export type InstallStatus =
   | 'success'
@@ -38,30 +39,8 @@ export type VersionConfig = {
  * Terminates the process with an error message if the version is too old
  */
 export async function assertMinVersion(): Promise<void> {
-  try {
-    const versionConfig = await getDynamicConfig<VersionConfig>(
-      'tengu_version_config',
-      { minVersion: '0.0.0' },
-    )
-
-    if (
-      versionConfig.minVersion &&
-      lt(MACRO.VERSION, versionConfig.minVersion)
-    ) {
-      console.error(`
-It looks like your version of Claude Code (${MACRO.VERSION}) needs an update.
-A newer version (${versionConfig.minVersion} or higher) is required to continue.
-
-To update, please run:
-    claude update
-
-This will ensure you have access to the latest features and improvements.
-`)
-      process.exit(1)
-    }
-  } catch (error) {
-    logError(`Error checking minimum version: ${error}`)
-  }
+  // 跳过所有版本校验
+  return
 }
 
 // Lock file for auto-updater to prevent concurrent updates

@@ -13,13 +13,14 @@ import { useExitOnCtrlCD } from '../hooks/useExitOnCtrlCD.js'
 import { MIN_LOGO_WIDTH } from './Logo.js'
 import { ConsoleOAuthFlow } from './ConsoleOAuthFlow.js'
 import { ApproveApiKey } from './ApproveApiKey.js'
-import { Select } from './CustomSelect/index.js'
+import { CustomSelect } from './CustomSelect/index.js'
 import { StructuredDiff } from './StructuredDiff.js'
 import { getTheme, ThemeNames } from '../utils/theme.js'
 import { isAnthropicAuthEnabled } from '../utils/auth.js'
 import Link from './Link.js'
 import { clearTerminal } from '../utils/terminal.js'
 import { PressEnterToContinue } from './PressEnterToContinue.js'
+import { MACRO } from '../constants/macro.js'
 
 type StepId = 'theme' | 'oauth' | 'api-key' | 'usage' | 'security'
 
@@ -88,7 +89,7 @@ export function Onboarding({ onDone }: Props): React.ReactNode {
         <Text bold>Choose the option that looks best when you select it:</Text>
         <Text dimColor>To change this later, run /config</Text>
       </Box>
-      <Select
+      <CustomSelect
         options={[
           { label: 'Light text', value: 'dark' },
           { label: 'Dark text', value: 'light' },

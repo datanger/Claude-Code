@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto'
 import envPaths from 'env-paths'
 import { promises as fsPromises } from 'fs'
 import type { LogOption, SerializedMessage } from '../types/logs.js'
+import { MACRO } from '../constants/macro.js'
 
 const IN_MEMORY_ERROR_LOG: Array<{
   error: string
@@ -377,5 +378,14 @@ export function logMCPError(serverName: string, error: unknown): void {
     writeFileSync(logFile, JSON.stringify(messages, null, 2), 'utf8')
   } catch {
     // Silently fail
+  }
+}
+
+// Debug log 开关，可通过环境变量 DEBUG 或 LOG_LEVEL 控制
+export const isDebug = process.env.DEBUG === 'true' || process.env.LOG_LEVEL === 'debug'
+
+export function debugLog(...args: any[]) {
+  if (isDebug) {
+    console.log(...args)
   }
 }

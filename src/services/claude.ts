@@ -12,7 +12,7 @@ import { addToTotalCost } from '../cost-tracker.js'
 import type { AssistantMessage, UserMessage } from '../query.js'
 import { Tool } from '../Tool.js'
 import { getAnthropicApiKey, getOrCreateUserID } from '../utils/config.js'
-import { logError, SESSION_ID } from '../utils/log.js'
+import { logError, SESSION_ID, debugLog } from '../utils/log.js'
 import { USER_AGENT } from '../utils/http.js'
 import {
   createAssistantAPIErrorMessage,
@@ -217,6 +217,12 @@ async function handleMessageStream(
   }
 
   const finalResponse = await stream.finalMessage()
+  
+  // 添加错误处理，确保 finalResponse 不为 undefined
+  if (!finalResponse) {
+    throw new Error('Stream finalMessage() returned undefined')
+  }
+  
   return {
     ...finalResponse,
     ttftMs,
@@ -411,15 +417,22 @@ export async function querySonnet(
     prependCLISysprompt: boolean
   },
 ): Promise<AssistantMessage> {
-  return await withVCR(messages, () =>
-    querySonnetWithPromptCaching(
-      messages,
-      systemPrompt,
-      maxThinkingTokens,
-      tools,
-      signal,
-      options,
-    ),
+  debugLog(`🌐 [DEBUG] querySonnet() function started`)
+  debugLog(`📨 [DEBUG] Messages count: ${messages.length}`)
+  debugLog(`📝 [DEBUG] System prompt items: ${systemPrompt.length}`)
+  debugLog(`🤔 [DEBUG] Max thinking tokens: ${maxThinkingTokens}`)
+  debugLog(`🔧 [DEBUG] Tools count: ${tools.length}`)
+  debugLog(`🔐 [DEBUG] dangerouslySkipPermissions: ${options.dangerouslySkipPermissions}`)
+  debugLog(`🤖 [DEBUG] Model: ${options.model}`)
+  debugLog(`📋 [DEBUG] prependCLISysprompt: ${options.prependCLISysprompt}`)
+
+  return querySonnetWithPromptCaching(
+    messages,
+    systemPrompt,
+    maxThinkingTokens,
+    tools,
+    signal,
+    options,
   )
 }
 
@@ -427,12 +440,26 @@ export function formatSystemPromptWithContext(
   systemPrompt: string[],
   context: { [k: string]: string },
 ): string[] {
+  // 自动识别当前操作系统
+  let osHint = ''
+  if (typeof process !== 'undefined' && process.platform) {
+    if (process.platform === 'win32') {
+      osHint = `\n[Environment Notice]\nYou are running on a Windows system. Only use Windows shell commands (e.g., 'type' for file content, 'dir' for listing files). Do NOT use Linux commands like 'cat', 'ls', 'grep', 'echo' with Unix syntax, etc.`
+    } else {
+      osHint = `\n[Environment Notice]\nYou are running on a Unix/Linux system. Use bash/zsh shell commands. Avoid Windows-specific commands like 'dir' or 'type'.`
+    }
+  }
+
   if (Object.entries(context).length === 0) {
-    return systemPrompt
+    return [
+      ...systemPrompt,
+      osHint,
+    ]
   }
 
   return [
     ...systemPrompt,
+    osHint,
     `\nAs you answer the user's questions, you can use the following context:\n`,
     ...Object.entries(context).map(
       ([key, value]) => `<context name="${key}">${value}</context>`,
@@ -452,67 +479,50 @@ async function querySonnetWithPromptCaching(
     prependCLISysprompt: boolean
   },
 ): Promise<AssistantMessage> {
-  const anthropic = await getAnthropicClient(options.model)
+  debugLog(`🔄 [DEBUG] querySonnetWithPromptCaching() started`)
+  
+  const anthropic = getAnthropicClient(options.model)
+  const useBetas = process.env.USER_TYPE === 'ant'
+  const betas = useBetas ? ['messages-2024-01-08'] : []
 
-  // Prepend system prompt block for easy API identification
-  if (options.prependCLISysprompt) {
-    // Log stats about first block for analyzing prefix matching config (see https://console.statsig.com/4aF3Ewatb6xPVpCwxb5nA3/dynamic_configs/claude_cli_system_prompt_prefixes)
-    const [firstSyspromptBlock] = splitSysPromptPrefix(systemPrompt)
-    logEvent('tengu_sysprompt_block', {
-      snippet: firstSyspromptBlock?.slice(0, 20),
-      length: String(firstSyspromptBlock?.length ?? 0),
-      hash: firstSyspromptBlock
-        ? createHash('sha256').update(firstSyspromptBlock).digest('hex')
-        : '',
-    })
+  const system = options.prependCLISysprompt
+    ? splitSysPromptPrefix(systemPrompt)
+    : systemPrompt
 
-    systemPrompt = [getCLISyspromptPrefix(), ...systemPrompt]
-  }
+  const toolSchemas = tools.map(t => t.schema)
+  debugLog(`🛠️ [DEBUG] Tool schemas count: ${toolSchemas.length}`)
 
-  const system: TextBlockParam[] = splitSysPromptPrefix(systemPrompt).map(
-    _ => ({
-      ...(PROMPT_CACHING_ENABLED
-        ? { cache_control: { type: 'ephemeral' } }
-        : {}),
-      text: _,
-      type: 'text',
-    }),
+  const messageParams = messages.map(m =>
+    m.type === 'user'
+      ? userMessageToMessageParam(m, true)
+      : assistantMessageToMessageParam(m, true),
   )
 
-  const toolSchemas = await Promise.all(
-    tools.map(async _ => ({
-      name: _.name,
-      description: await _.prompt({
-        dangerouslySkipPermissions: options.dangerouslySkipPermissions,
-      }),
-      // Use tool's JSON schema directly if provided, otherwise convert Zod schema
-      input_schema: ('inputJSONSchema' in _ && _.inputJSONSchema
-        ? _.inputJSONSchema
-        : zodToJsonSchema(_.inputSchema)) as Anthropic.Tool.InputSchema,
-    })),
-  )
-
-  const betas = await getBetas()
-  const useBetas = PROMPT_CACHING_ENABLED && betas.length > 0
-  logEvent('tengu_api_query', {
-    model: options.model,
-    messagesLength: String(
-      JSON.stringify([...system, ...messages, ...toolSchemas]).length,
-    ),
-    temperature: String(MAIN_QUERY_TEMPERATURE),
-    provider: USE_BEDROCK ? 'bedrock' : USE_VERTEX ? 'vertex' : '1p',
-    ...(useBetas ? { betas: betas.join(',') } : {}),
-  })
+  debugLog(`📨 [DEBUG] Message params count: ${messageParams.length}`)
+  debugLog(`📊 [DEBUG] Total tokens estimate: ${JSON.stringify([...system, ...messageParams, ...toolSchemas]).length}`)
 
   const startIncludingRetries = Date.now()
   let start = Date.now()
   let attemptNumber = 0
   let response
   let stream: BetaMessageStream | undefined = undefined
+  
+  debugLog(`🚀 [DEBUG] About to call anthropic.beta.messages.stream...`)
+  debugLog(`⏱️ [DEBUG] API call started at: ${new Date().toISOString()}`)
+  
   try {
     response = await withRetry(async attempt => {
       attemptNumber = attempt
       start = Date.now()
+      debugLog(`🔄 [DEBUG] API call attempt ${attempt} started`)
+      
+      debugLog(`🌐 [DEBUG] Calling anthropic.beta.messages.stream with:`)
+      debugLog(`   - Model: ${options.model}`)
+      debugLog(`   - Max tokens: ${Math.max(maxThinkingTokens + 1, getMaxTokensForModel(options.model))}`)
+      debugLog(`   - Messages count: ${messageParams.length}`)
+      debugLog(`   - Tools count: ${toolSchemas.length}`)
+      debugLog(`   - System prompt items: ${system.length}`)
+      
       const s = anthropic.beta.messages.stream(
         {
           model: options.model,
@@ -520,7 +530,7 @@ async function querySonnetWithPromptCaching(
             maxThinkingTokens + 1,
             getMaxTokensForModel(options.model),
           ),
-          messages: addCacheBreakpoints(messages),
+          messages: addCacheBreakpoints(messageParams),
           temperature: MAIN_QUERY_TEMPERATURE,
           system,
           tools: toolSchemas,
@@ -538,9 +548,13 @@ async function querySonnetWithPromptCaching(
         { signal },
       )
       stream = s
+      debugLog(`✅ [DEBUG] anthropic.beta.messages.stream call initiated successfully`)
       return handleMessageStream(s)
     })
+    debugLog(`✅ [DEBUG] API call completed successfully`)
+    debugLog(`⏱️ [DEBUG] API call finished at: ${new Date().toISOString()}`)
   } catch (error) {
+    debugLog(`❌ [DEBUG] API call failed: ${error}`)
     logError(error)
     logEvent('tengu_api_error', {
       model: options.model,
@@ -557,8 +571,17 @@ async function querySonnetWithPromptCaching(
     })
     return getAssistantMessageFromError(error)
   }
+  
   const durationMs = Date.now() - start
   const durationMsIncludingRetries = Date.now() - startIncludingRetries
+  
+  debugLog(`📊 [DEBUG] API call statistics:`)
+  debugLog(`   - Duration: ${durationMs}ms`)
+  debugLog(`   - Duration including retries: ${durationMsIncludingRetries}ms`)
+  debugLog(`   - Input tokens: ${response.usage.input_tokens}`)
+  debugLog(`   - Output tokens: ${response.usage.output_tokens}`)
+  debugLog(`   - Stop reason: ${response.stop_reason}`)
+  
   logEvent('tengu_api_success', {
     model: options.model,
     messageCount: String(messages.length),
@@ -595,24 +618,10 @@ async function querySonnetWithPromptCaching(
     (cacheCreationInputTokens / 1_000_000) *
       SONNET_COST_PER_MILLION_PROMPT_CACHE_WRITE_TOKENS
 
+  debugLog(`💰 [DEBUG] Cost calculation: $${costUSD.toFixed(6)}`)
   addToTotalCost(costUSD, durationMsIncludingRetries)
 
-  return {
-    message: {
-      ...response,
-      content: normalizeContentFromAPI(response.content),
-      usage: {
-        ...response.usage,
-        cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
-        cache_creation_input_tokens:
-          response.usage.cache_creation_input_tokens ?? 0,
-      },
-    },
-    costUSD,
-    durationMs,
-    type: 'assistant',
-    uuid: randomUUID(),
-  }
+  return response
 }
 
 function getAssistantMessageFromError(error: unknown): AssistantMessage {

@@ -9,6 +9,7 @@ import { PRODUCT_NAME } from '../constants/product.js'
 import { setupNewPrefix, installGlobalPackage } from '../utils/autoUpdater.js'
 import { logError } from '../utils/log.js'
 import { logEvent } from '../services/statsig.js'
+import { MACRO } from '../constants/macro.js'
 
 type Props = {
   customPrefix: string
