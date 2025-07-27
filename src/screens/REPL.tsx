@@ -1,5 +1,5 @@
 import { ToolUseBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
-import { Box, Newline, Static } from 'ink'
+import { Box, Newline, Static, Text } from 'ink'
 import ProjectOnboarding, {
   markProjectOnboardingComplete,
 } from '../ProjectOnboarding.js'
@@ -59,6 +59,9 @@ import { clearTerminal, updateTerminalTitle } from '../utils/terminal.js'
 import { BinaryFeedback } from '../components/binary-feedback/BinaryFeedback.js'
 import { getMaxThinkingTokens } from '../utils/thinking.js'
 import { getOriginalCwd } from '../utils/state.js'
+// 新增：导入提供商选择器
+import { ProviderSelector } from '../components/ProviderSelector.js'
+import { ProviderType } from '../services/providers/manager.js'
 
 type Props = {
   commands: Command[]
@@ -138,6 +141,10 @@ export function REPL({
   const [binaryFeedbackContext, setBinaryFeedbackContext] =
     useState<BinaryFeedbackContext | null>(null)
 
+  // 新增：提供商状态管理
+  const [currentProvider, setCurrentProvider] = useState<ProviderType>('claude')
+  const [showProviderSelector, setShowProviderSelector] = useState(false)
+
   const getBinaryFeedbackResponse = useCallback(
     (
       m1: AssistantMessage,
@@ -159,6 +166,23 @@ export function REPL({
   }>({})
 
   const { status: apiKeyStatus, reverify } = useApiKeyVerification()
+  
+  // 新增：提供商切换处理函数
+  const handleProviderChange = useCallback((providerType: ProviderType) => {
+    setCurrentProvider(providerType)
+    setShowProviderSelector(false)
+    // 设置环境变量以启用多提供商模式
+    process.env.USE_MULTI_PROVIDER = 'true'
+    process.env.CLAUDE_PROVIDER = providerType
+  }, [])
+
+  // 检查是否启用了多提供商模式
+  const useMultiProvider = process.env.USE_MULTI_PROVIDER === 'true' || 
+                         process.env.CLAUDE_PROVIDER !== undefined
+  
+  // 在多提供商模式下，跳过API密钥验证
+  const effectiveApiKeyStatus = useMultiProvider ? 'valid' : apiKeyStatus
+
   function onCancel() {
     if (!isLoading) {
       return
@@ -610,12 +634,36 @@ export function REPL({
           !binaryFeedbackContext &&
           !showingCostDialog && (
             <>
+              {/* 新增：提供商选择器 */}
+              {showProviderSelector && (
+                <ProviderSelector
+                  currentProvider={currentProvider}
+                  onProviderChange={handleProviderChange}
+                />
+              )}
+              
+              {/* 新增：提供商切换按钮 */}
+              <Box marginBottom={1}>
+                <Box marginRight={1}>
+                  <Text color="cyan">Provider:</Text>
+                </Box>
+                <Box>
+                  <Text 
+                    color="blue" 
+                    bold
+                    onClick={() => setShowProviderSelector(true)}
+                  >
+                    {currentProvider.toUpperCase()}
+                  </Text>
+                </Box>
+              </Box>
+              
               <PromptInput
                 commands={commands}
                 forkNumber={forkNumber}
                 messageLogName={messageLogName}
                 tools={tools}
-                isDisabled={apiKeyStatus === 'invalid'}
+                isDisabled={effectiveApiKeyStatus === 'invalid'}
                 isLoading={isLoading}
                 onQuery={onQuery}
                 debug={debug}

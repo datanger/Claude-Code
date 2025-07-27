@@ -80,6 +80,8 @@ import { clearTerminal } from '../utils/terminal.js'
 import { showInvalidConfigDialog } from '../components/InvalidConfigDialog.js'
 import { ConfigParseError } from '../utils/errors.js'
 import { grantReadPermissionForOriginalDir } from '../utils/permissions/filesystem.js'
+// 新增：导入提供商命令处理函数
+import { handleProviderCommand } from '../commands/provider.js'
 
 export function completeOnboarding(): void {
   const config = getGlobalConfig()
@@ -120,27 +122,34 @@ async function showSetupScreens(
     })
   }
 
-  // Check for custom API key (only allowed for ants)
-  if (process.env.ANTHROPIC_API_KEY && process.env.USER_TYPE === 'ant') {
-    const customApiKeyTruncated = normalizeApiKeyForConfig(
-      process.env.ANTHROPIC_API_KEY!,
-    )
-    const keyStatus = getCustomApiKeyStatus(customApiKeyTruncated)
-    if (keyStatus === 'new') {
-      await new Promise<void>(resolve => {
-        render(
-          <ApproveApiKey
-            customApiKeyTruncated={customApiKeyTruncated}
-            onDone={async () => {
-              await clearTerminal()
-              resolve()
-            }}
-          />,
-          {
-            exitOnCtrlC: false,
-          },
-        )
-      })
+  // 检查是否启用了多提供商模式
+  const useMultiProvider = process.env.USE_MULTI_PROVIDER === 'true' || 
+                         process.env.CLAUDE_PROVIDER !== undefined
+
+  // 如果启用了多提供商模式，跳过API密钥验证
+  if (!useMultiProvider) {
+    // Check for custom API key (only allowed for ants)
+    if (process.env.ANTHROPIC_API_KEY && process.env.USER_TYPE === 'ant') {
+      const customApiKeyTruncated = normalizeApiKeyForConfig(
+        process.env.ANTHROPIC_API_KEY!,
+      )
+      const keyStatus = getCustomApiKeyStatus(customApiKeyTruncated)
+      if (keyStatus === 'new') {
+        await new Promise<void>(resolve => {
+          render(
+            <ApproveApiKey
+              customApiKeyTruncated={customApiKeyTruncated}
+              onDone={async () => {
+                await clearTerminal()
+                resolve()
+              }}
+            />,
+            {
+              exitOnCtrlC: false,
+            },
+          )
+        })
+      }
     }
   }
 
@@ -354,6 +363,16 @@ ${commandList}`,
       'Skip all permission checks. Only works in Docker containers with no internet access. Will crash otherwise.',
       () => true,
     )
+    .option(
+      '--provider <provider>',
+      'Specify AI provider (claude, openai, deepseek, local)',
+      String,
+    )
+    .option(
+      '--model <model>',
+      'Specify model name for the selected provider',
+      String,
+    )
     .action(
       async (
         prompt,
@@ -364,8 +383,23 @@ ${commandList}`,
           enableArchitect,
           print,
           dangerouslySkipPermissions,
+          provider,
+          model,
         },
       ) => {
+        // 如果指定了provider，设置环境变量
+        if (provider) {
+          process.env.USE_MULTI_PROVIDER = 'true'
+          process.env.CLAUDE_PROVIDER = provider
+          console.log(`🤖 Using provider: ${provider}`)
+        }
+        
+        // 如果指定了model，设置环境变量
+        if (model) {
+          process.env.CLAUDE_MODEL = model
+          console.log(`🤖 Using model: ${model}`)
+        }
+        
         await showSetupScreens(dangerouslySkipPermissions, print)
         logEvent('tengu_init', {
           entrypoint: 'claude',
@@ -375,6 +409,8 @@ ${commandList}`,
           verbose: verbose?.toString() ?? 'false',
           debug: debug?.toString() ?? 'false',
           print: print?.toString() ?? 'false',
+          provider: provider ?? 'claude',
+          model: model ?? 'default',
         })
         await setup(cwd, dangerouslySkipPermissions)
 
@@ -498,6 +534,24 @@ ${commandList}`,
       console.log(
         JSON.stringify(listConfigForCLI((global as true) ?? false), null, 2),
       )
+      process.exit(0)
+    })
+
+  // 新增：claude provider 命令
+  const provider = program
+    .command('provider')
+    .description('Manage AI providers (claude provider --list)')
+
+  provider
+    .option('--list', 'List all available providers and their status')
+    .option('--set <provider>', 'Switch to a specific provider')
+    .option('--config <provider>', 'Show configuration instructions for a provider')
+    .option('--verify <provider>', 'Verify provider configuration')
+    .option('--reset <provider>', 'Reset provider configuration to defaults')
+    .option('--help', 'Show help message')
+    .action(async (options) => {
+      await setup(cwd(), false)
+      await handleProviderCommand(options)
       process.exit(0)
     })
 

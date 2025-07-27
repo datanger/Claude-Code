@@ -30,6 +30,9 @@ import {
 } from './utils/messages.js'
 import { BashTool } from './tools/BashTool/BashTool.js'
 import { getCwd } from './utils/state.js'
+// 新增：导入多提供商支持
+import { generateContent as generateContentWithProvider } from './services/providers/index.js'
+import { ProviderConfigManager } from './services/providers/config.js'
 
 export type Response = { costUSD: number; response: string }
 export type UserMessage = {
@@ -135,19 +138,57 @@ export async function* query(
   const fullSystemPrompt = formatSystemPromptWithContext(systemPrompt, context)
 
   function getAssistantResponse() {
-    return querySonnet(
-      normalizeMessagesForAPI(messages),
-      fullSystemPrompt,
-      toolUseContext.options.maxThinkingTokens,
-      toolUseContext.options.tools,
-      toolUseContext.abortController.signal,
-      {
-        dangerouslySkipPermissions:
-          toolUseContext.options.dangerouslySkipPermissions ?? false,
-        model: toolUseContext.options.slowAndCapableModel,
-        prependCLISysprompt: true,
-      },
-    )
+    // 检查是否启用了多提供商支持
+    const useMultiProvider = process.env.USE_MULTI_PROVIDER === 'true' || 
+                           process.env.CLAUDE_PROVIDER !== undefined
+    
+    if (useMultiProvider) {
+      // 使用多提供商系统
+      return generateContentWithProvider({
+        messages: normalizeMessagesForAPI(messages),
+        systemPrompt: fullSystemPrompt,
+        tools: toolUseContext.options.tools,
+        signal: toolUseContext.abortController.signal,
+        options: {
+          dangerouslySkipPermissions:
+            toolUseContext.options.dangerouslySkipPermissions ?? false,
+          model: toolUseContext.options.slowAndCapableModel,
+          prependCLISysprompt: false, // 已经在上面处理了
+        },
+      }).then(response => ({
+        costUSD: response.costUSD,
+        durationMs: response.durationMs,
+        message: {
+          id: `provider-${Date.now()}`,
+          content: [{ type: 'text', text: response.content }],
+          role: 'assistant',
+          model: toolUseContext.options.slowAndCapableModel,
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: response.usage ? {
+            input_tokens: response.usage.promptTokens,
+            output_tokens: response.usage.completionTokens,
+          } : undefined,
+        } as APIAssistantMessage,
+        type: 'assistant' as const,
+        uuid: `provider-${Date.now()}` as UUID,
+      }))
+    } else {
+      // 使用原有的Claude系统
+      return querySonnet(
+        normalizeMessagesForAPI(messages),
+        fullSystemPrompt,
+        toolUseContext.options.maxThinkingTokens,
+        toolUseContext.options.tools,
+        toolUseContext.abortController.signal,
+        {
+          dangerouslySkipPermissions:
+            toolUseContext.options.dangerouslySkipPermissions ?? false,
+          model: toolUseContext.options.slowAndCapableModel,
+          prependCLISysprompt: true,
+        },
+      )
+    }
   }
 
   const result = await queryWithBinaryFeedback(
