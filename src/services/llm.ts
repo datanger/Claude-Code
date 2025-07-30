@@ -11,6 +11,11 @@ export interface LLMQueryOptions {
   dangerouslySkipPermissions: boolean
   model: string
   prependCLISysprompt: boolean
+  customProviderConfig?: {
+    provider: LLMProvider
+    model: string
+    skipPermissions: boolean
+  }
 }
 
 /**
@@ -30,11 +35,13 @@ export async function queryLLM(
   debugLog(`🚀 [DEBUG] queryLLM - System prompt items: ${systemPrompt.length}`)
   debugLog(`🚀 [DEBUG] queryLLM - Tools count: ${tools.length}`)
   
-  const providerConfig = getProviderConfig(options.model)
+  // 使用自定义 provider 配置或自动检测
+  const providerConfig = options.customProviderConfig || getProviderConfig(options.model)
   debugLog(`🔍 [DEBUG] queryLLM - Provider config:`, {
     provider: providerConfig.provider,
     model: providerConfig.model,
-    skipPermissions: providerConfig.skipPermissions
+    skipPermissions: providerConfig.skipPermissions,
+    isCustom: !!options.customProviderConfig
   })
   
   // 根据提供商选择对应的查询函数

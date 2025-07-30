@@ -55,6 +55,7 @@ type Props = {
   ) => void
   readFileTimestamps: { [filename: string]: number }
   model?: string
+  provider?: string
 }
 
 function getPastedTextPrompt(text: string): string {
@@ -87,6 +88,7 @@ function PromptInput({
   setForkConvoWithMessagesOnTheNextRender,
   readFileTimestamps,
   model,
+  provider,
 }: Props): React.ReactNode {
   const [isAutoUpdating, setIsAutoUpdating] = useState(false)
   const [exitMessage, setExitMessage] = useState<{
@@ -211,6 +213,11 @@ function PromptInput({
           verbose,
           slowAndCapableModel: finalModel,
           maxThinkingTokens: 0,
+          customProviderConfig: provider ? {
+            provider: provider as any,
+            model: finalModel,
+            skipPermissions: provider !== 'anthropic'
+          } : undefined,
         },
         messageId: undefined,
         abortController,
@@ -218,6 +225,7 @@ function PromptInput({
         setForkConvoWithMessagesOnTheNextRender,
       },
       pastedImage ?? null,
+      provider,
     )
 
     if (messages.length) {

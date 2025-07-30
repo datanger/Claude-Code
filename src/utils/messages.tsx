@@ -163,6 +163,7 @@ export async function processUserInput(
     ) => void
   },
   pastedImage: string | null,
+  provider?: string,
 ): Promise<Message[]> {
   // Bash commands
   if (mode === 'bash') {

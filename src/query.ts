@@ -157,6 +157,7 @@ export async function* query(
           toolUseContext.options.dangerouslySkipPermissions ?? false,
         model: toolUseContext.options.slowAndCapableModel,
         prependCLISysprompt: true,
+        customProviderConfig: toolUseContext.options.customProviderConfig, // 传递自定义 provider 配置
       },
     )
   }

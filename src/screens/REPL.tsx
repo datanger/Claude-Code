@@ -233,12 +233,18 @@ export function REPL({
           verbose,
           slowAndCapableModel: finalModel,
           maxThinkingTokens: 0,
+          customProviderConfig: provider ? {
+            provider: provider as any,
+            model: finalModel,
+            skipPermissions: provider !== 'anthropic'
+          } : undefined,
         },
         messageId: getLastAssistantMessageId(messages),
         setForkConvoWithMessagesOnTheNextRender,
         readFileTimestamps: readFileTimestamps.current,
       },
       null,
+      provider,
     )
 
     if (newMessages.length) {
@@ -281,6 +287,11 @@ export function REPL({
             verbose,
             dangerouslySkipPermissions,
             maxThinkingTokens,
+            customProviderConfig: provider ? {
+              provider: provider as any,
+              model: finalModel,
+              skipPermissions: provider !== 'anthropic'
+            } : undefined,
           },
           messageId: getLastAssistantMessageId([...messages, ...newMessages]),
           readFileTimestamps: readFileTimestamps.current,
@@ -355,6 +366,11 @@ export function REPL({
           verbose,
           dangerouslySkipPermissions,
           maxThinkingTokens,
+          customProviderConfig: provider ? {
+            provider: provider as any,
+            model: finalModel,
+            skipPermissions: provider !== 'anthropic'
+          } : undefined,
         },
         messageId: getLastAssistantMessageId([...messages, lastMessage]),
         readFileTimestamps: readFileTimestamps.current,
@@ -646,6 +662,7 @@ export function REPL({
                 }
                 readFileTimestamps={readFileTimestamps.current}
                 model={model}
+                provider={provider}
               />
             </>
           )}

@@ -11,11 +11,34 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY
 let deepseekClient: OpenAI | null = null
 
 /**
+ * 检查 DeepSeek API 连接
+ */
+async function checkDeepSeekConnection(): Promise<boolean> {
+  try {
+    debugLog(`🔍 [DEBUG] Checking DeepSeek connection at: ${DEEPSEEK_API_BASE}`)
+    const response = await fetch(`${DEEPSEEK_API_BASE}/models`, {
+      headers: {
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      signal: AbortSignal.timeout(10000) // 10秒超时
+    })
+    const isAvailable = response.ok
+    debugLog(`🔍 [DEBUG] DeepSeek connection check result: ${isAvailable ? 'OK' : 'FAILED'}`)
+    return isAvailable
+  } catch (error) {
+    debugLog(`❌ [DEBUG] DeepSeek connection check failed: ${error}`)
+    return false
+  }
+}
+
+/**
  * 获取 DeepSeek API Key
  */
 export function getDeepSeekApiKey(): null | string {
   // 优先使用环境变量
   if (DEEPSEEK_API_KEY) {
+    debugLog(`✅ [DEBUG] DeepSeek API key found: ${DEEPSEEK_API_KEY.substring(0, 20)}...`)
     return DEEPSEEK_API_KEY
   }
   
@@ -285,108 +308,63 @@ export async function queryDeepSeek(
       function: {
         name: tool.name,
         description: tool.description,
-        parameters: tool.schema,
-      },
+        parameters: tool.parameters
+      }
     }))
     
-    debugLog(`🛠️ [DEBUG] Converted ${openaiTools.length} tools to OpenAI format`)
+    debugLog(`🔧 [DEBUG] Converted ${openaiTools.length} tools to OpenAI format`)
     
-    // 根据模型类型设置max_tokens
-    const getMaxTokensForDeepSeekModel = (model: string): number => {
-      const lowerModel = model.toLowerCase()
-      if (lowerModel.includes('v3')) {
-        return 128000  // DeepSeek V3 支持128K
-      }
-      if (lowerModel.includes('v2.5')) {
-        return 128000  // DeepSeek V2.5 支持128K
-      }
-      if (lowerModel.includes('coder')) {
-        return 32000   // DeepSeek Coder 支持32K
-      }
-      if (lowerModel.includes('chat')) {
-        return 32000   // DeepSeek Chat 支持32K
-      }
-      return 32000     // 默认32K
-    }
-    
-    const maxTokens = getMaxTokensForDeepSeekModel(options.model)
-    debugLog(`🔧 [DEBUG] DeepSeek model: ${options.model}, max_tokens: ${maxTokens}`)
-    
-    // 调用 DeepSeek API
-    debugLog(`🌐 [DEBUG] Calling DeepSeek API...`)
-    const response = await client.chat.completions.create({
+    // 构造请求参数
+    const requestParams: any = {
       model: options.model,
       messages: openaiMessages,
-      tools: openaiTools.length > 0 ? openaiTools : undefined,
-      tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
-      max_tokens: maxTokens,
-      temperature: 0,
-      stream: false,
-    }, {
-      signal,
-    })
+      max_tokens: 4096,
+      temperature: 0.7,
+      top_p: 0.9,
+    }
+    
+    if (openaiTools.length > 0) {
+      requestParams.tools = openaiTools
+      requestParams.tool_choice = 'auto'
+    }
+    
+    debugLog(`📤 [DEBUG] Making API call to DeepSeek with params:`, JSON.stringify(requestParams, null, 2))
+    
+    const completion = await client.chat.completions.create(requestParams)
+    
+    debugLog(`✅ [DEBUG] DeepSeek API call successful`)
+    debugLog(`📥 [DEBUG] Response:`, JSON.stringify(completion, null, 2))
+    
+    const choice = completion.choices[0]
+    if (!choice) {
+      throw new Error('DeepSeek returned no choices')
+    }
+    
+    const content = choice.message.content || ''
+    debugLog(`📝 [DEBUG] Generated content: ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`)
     
     const endTime = Date.now()
     const durationMs = endTime - startTime
     
-    debugLog(`✅ [DEBUG] DeepSeek API call completed in ${durationMs}ms`)
-    debugLog(`📊 [DEBUG] Usage:`, response.usage)
-    
-    // 添加 DEBUG 日志显示 API 响应内容
-    debugLog(`📤 [DEBUG] API Response content:`, response.choices[0].message.content)
-    
-    // 计算成本
-    const costUSD = calculateDeepSeekCost(
-      options.model,
-      response.usage?.prompt_tokens || 0,
-      response.usage?.completion_tokens || 0,
-    )
-    
-    debugLog(`💰 [DEBUG] Estimated cost: $${costUSD.toFixed(6)}`)
-    
-    // 转换响应格式
-    const choice = response.choices[0]
-    if (!choice) {
-      throw new Error('No response from DeepSeek API')
-    }
-    
-    const message = choice.message
-    
-    // 转换为 Anthropic 格式的助手消息
     const assistantMessage: AssistantMessage = {
-      costUSD,
+      costUSD: calculateDeepSeekCost(options.model, completion.usage?.prompt_tokens || 0, completion.usage?.completion_tokens || 0),
       durationMs,
       message: {
-        id: `deepseek_${Date.now()}`,
+        id: completion.id,
         type: 'assistant',
         role: 'assistant',
-        content: message.content ? [{ type: 'text', text: message.content }] : [],
+        content: [{ type: 'text', text: content }],
         model: options.model,
         stop_reason: choice.finish_reason || 'end_turn',
         stop_sequence: null,
         usage: {
-          input_tokens: response.usage?.prompt_tokens || 0,
-          output_tokens: response.usage?.completion_tokens || 0,
+          input_tokens: completion.usage?.prompt_tokens || 0,
+          output_tokens: completion.usage?.completion_tokens || 0,
         },
       },
       type: 'assistant',
       uuid: crypto.randomUUID(),
     }
-    
-    // 处理工具调用
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      for (const toolCall of message.tool_calls) {
-        assistantMessage.message.content.push({
-          type: 'tool_use',
-          id: toolCall.id,
-          name: toolCall.function.name,
-          input: JSON.parse(toolCall.function.arguments),
-        })
-      }
-    }
-    
-    debugLog(`📝 [DEBUG] Response converted to Anthropic format`)
-    debugLog(`🎯 [DEBUG] queryDeepSeek() completed successfully`)
     
     return assistantMessage
     
@@ -395,6 +373,24 @@ export async function queryDeepSeek(
     const durationMs = endTime - startTime
     
     console.error(`❌ [DEBUG] DeepSeek API call failed after ${durationMs}ms:`, error)
+    
+    // 提供更详细的错误信息
+    let errorMessage = 'Unknown error'
+    if (error instanceof Error) {
+      if (error.message.includes('401')) {
+        errorMessage = 'DeepSeek API key is invalid or expired. Please check your DEEPSEEK_API_KEY.'
+      } else if (error.message.includes('403')) {
+        errorMessage = 'Access denied. Please check your DeepSeek API permissions.'
+      } else if (error.message.includes('429')) {
+        errorMessage = 'Rate limit exceeded. Please try again later.'
+      } else if (error.message.includes('500')) {
+        errorMessage = 'DeepSeek server error. Please try again later.'
+      } else if (error.message.includes('fetch')) {
+        errorMessage = 'Network error. Please check your internet connection and DEEPSEEK_API_BASE setting.'
+      } else {
+        errorMessage = error.message
+      }
+    }
     
     // 返回错误消息
     return {
@@ -406,7 +402,7 @@ export async function queryDeepSeek(
         role: 'assistant',
         content: [{ 
           type: 'text', 
-          text: `Error calling DeepSeek API: ${error instanceof Error ? error.message : String(error)}` 
+          text: `Error calling DeepSeek API: ${errorMessage}` 
         }],
         model: options.model,
         stop_reason: 'error',

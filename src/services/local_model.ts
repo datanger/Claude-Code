@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import type { AssistantMessage, UserMessage } from '../query.js'
 import type { Tool } from '../Tool.js'
 import { debugLog, logError } from '../utils/log.js'
+// @ts-ignore
 import jwt from 'jsonwebtoken'
 
 // 设置SSL验证跳过，必须在任何HTTPS请求之前设置
@@ -14,6 +15,24 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
  */
 const LOCAL_MODEL_BASE = process.env.LOCAL_MODEL_BASE || 'https://192.168.10.173/sdw/chatbot/sysai/v1'
 const LOCAL_MODEL_API_KEY = process.env.LOCAL_MODEL_API_KEY || ''
+
+// 检查本地模型服务是否可用
+async function checkLocalModelAvailability(): Promise<boolean> {
+  try {
+    const url = LOCAL_MODEL_BASE.replace(/\/+$/, '') + '/health'
+    debugLog(`🔍 [DEBUG] Checking local model availability at: ${url}`)
+    const response = await fetch(url, { 
+      method: 'GET',
+      signal: AbortSignal.timeout(5000) // 5秒超时
+    })
+    const isAvailable = response.ok
+    debugLog(`🔍 [DEBUG] Local model health check result: ${isAvailable ? 'OK' : 'FAILED'}`)
+    return isAvailable
+  } catch (error) {
+    debugLog(`❌ [DEBUG] Local model health check failed: ${error}`)
+    return false
+  }
+}
 
 // 生成JWT token的函数
 function generateJWTToken(): string {
@@ -311,48 +330,49 @@ function adjustRequestForModel(requestObj: any, modelType: string): void {
     case 'deepseek-coder':
       // DeepSeek 特定配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      requestObj.top_p = requestObj.top_p ?? 0.95;
+      // 移除 top_p，因为可能导致服务器返回空响应
+      // requestObj.top_p = requestObj.top_p ?? 0.95;
       break;
       
     case 'gpt':
       // OpenAI 兼容配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      requestObj.top_p = requestObj.top_p ?? 1;
+      // requestObj.top_p = requestObj.top_p ?? 1;
       break;
       
     case 'claude':
       // Claude 配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      requestObj.top_p = requestObj.top_p ?? 0.9;
+      // requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
       
     case 'llama':
       // Llama 配置
       requestObj.temperature = requestObj.temperature ?? 0.8;
-      requestObj.top_p = requestObj.top_p ?? 0.9;
+      // requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
       
     case 'qwen':
       // Qwen 配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      requestObj.top_p = requestObj.top_p ?? 0.9;
+      // requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
       
     case 'chatglm':
       // ChatGLM 配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      requestObj.top_p = requestObj.top_p ?? 0.9;
+      // requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
       
     default:
       // 通用配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      requestObj.top_p = requestObj.top_p ?? 0.9;
+      // requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
   }
   
   debugLog(`🔧 [DEBUG] adjustRequestForModel - Adjusted temperature: ${requestObj.temperature}`)
-  debugLog(`🔧 [DEBUG] adjustRequestForModel - Adjusted top_p: ${requestObj.top_p}`)
+  // debugLog(`🔧 [DEBUG] adjustRequestForModel - Adjusted top_p: ${requestObj.top_p}`)
 }
 
 /**
@@ -415,7 +435,9 @@ async function callLocalModel(request: LocalRequest, signal: AbortSignal): Promi
 
     // 获取响应文本
     const text = await res.text()
-    debugLog(`📥 [DEBUG] callLocalModel - Response text:`, text.substring(0, 500))
+    debugLog(`📥 [DEBUG] callLocalModel - Response text length: ${text.length}`)
+    debugLog(`📥 [DEBUG] callLocalModel - Response text (first 1000 chars):`, text.substring(0, 1000))
+    debugLog(`📥 [DEBUG] callLocalModel - Response text (last 500 chars):`, text.substring(Math.max(0, text.length - 500)))
     
     if (!res.ok) {
       debugLog(`❌ [DEBUG] callLocalModel - HTTP error ${res.status}: ${text}`)
@@ -425,7 +447,7 @@ async function callLocalModel(request: LocalRequest, signal: AbortSignal): Promi
     // 检查响应是否为空
     if (!text || text.trim().length === 0) {
       debugLog(`❌ [DEBUG] callLocalModel - Empty response`)
-      throw new Error('Local model returned empty response')
+      throw new Error('Local model returned empty response. Please check if the server is running and accessible.')
     }
     
     try {
@@ -440,6 +462,19 @@ async function callLocalModel(request: LocalRequest, signal: AbortSignal): Promi
       // 检查是否有 choices 数组 - 参考localAdapter.ts
       if (!parsed.choices || !Array.isArray(parsed.choices) || parsed.choices.length === 0) {
         throw new Error('Local model server returned invalid response: missing choices array')
+      }
+      
+      // 检查 choices 中的 message 是否有 content
+      const choice = parsed.choices[0]
+      if (!choice || !choice.message) {
+        throw new Error('Local model server returned invalid response: missing message in choice')
+      }
+      
+      // 检查 content 是否为空或 null
+      if (!choice.message.content || choice.message.content.trim() === '') {
+        debugLog(`⚠️ [DEBUG] callLocalModel - Choice message content is empty or null`)
+        debugLog(`⚠️ [DEBUG] callLocalModel - Full choice:`, JSON.stringify(choice, null, 2))
+        // 不要抛出错误，而是继续处理，让上层处理空内容
       }
       
       debugLog(`✅ [DEBUG] callLocalModel - Successfully parsed JSON response`)
@@ -463,7 +498,7 @@ async function callLocalModel(request: LocalRequest, signal: AbortSignal): Promi
       }
       
       if (error.name === 'TypeError' && error.message.includes('fetch')) {
-        throw new Error(`Cannot connect to local model server at ${LOCAL_MODEL_BASE}. Please check if the server is running and the URL is correct.`)
+        throw new Error(`Cannot connect to local model server at ${LOCAL_MODEL_BASE}. Please check if the server is running and the URL is correct. You can set LOCAL_MODEL_BASE environment variable to point to your local model server.`)
       }
     }
     
@@ -548,7 +583,7 @@ export async function queryLocalModel(
       model: modelName,
       messages: localMessages,
       stream: false,
-      temperature: 0,
+      // 移除 temperature: 0，让 adjustRequestForModel 正确设置
       max_tokens: 300,  // 使用与curl相同的值
       // 移除所有服务器不支持的字段
       // presence_penalty: 0,
@@ -563,31 +598,17 @@ export async function queryLocalModel(
     if (tools.length > 0) {
       const limitedTools = tools.slice(0, 2)
       debugLog(`🔧 [DEBUG] queryLocalModel - Limiting tools from ${tools.length} to ${limitedTools.length}`)
-      requestObj.tools = toolsToLocal(limitedTools)
+      // 暂时移除 tools，因为可能导致服务器返回空响应
+      // requestObj.tools = toolsToLocal(limitedTools)
+      debugLog(`🔧 [DEBUG] queryLocalModel - Temporarily disabled tools to avoid empty response`)
     }
 
-    // 添加简化模式测试 - 只移除tools但保留system prompt
-    const simplifiedMode = process.env.LOCAL_MODEL_SIMPLIFIED === 'true'
-    if (simplifiedMode) {
-      debugLog(`🔧 [DEBUG] queryLocalModel - Using simplified mode - removing tools but keeping system prompt`)
-      
-      // 移除tools
-      if (requestObj.tools && requestObj.tools.length > 0) {
-        debugLog(`🔧 [DEBUG] queryLocalModel - Removing ${requestObj.tools.length} tools`)
-        delete requestObj.tools
-      }
-      
-      // 简化system prompt - 使用非常简单的prompt进行测试
-      if (requestObj.messages.length > 0 && requestObj.messages[0].role === 'system') {
-        const originalSystemPrompt = requestObj.messages[0].content
-        const simplifiedSystemPrompt = 'You are a helpful assistant.'
-        requestObj.messages[0].content = simplifiedSystemPrompt
-        debugLog(`🔧 [DEBUG] queryLocalModel - Simplified system prompt from ${originalSystemPrompt.length} to ${simplifiedSystemPrompt.length} characters`)
-      }
-      
-      // 完全移除system prompt进行测试
-      requestObj.messages = requestObj.messages.filter(msg => msg.role !== 'system')
-      debugLog(`🔧 [DEBUG] queryLocalModel - Removed system prompt, remaining messages: ${requestObj.messages.length}`)
+    // 简化 system prompt - 使用简单的 prompt
+    if (requestObj.messages.length > 0 && requestObj.messages[0].role === 'system') {
+      const originalSystemPrompt = requestObj.messages[0].content
+      const simplifiedSystemPrompt = 'You are a helpful assistant.'
+      requestObj.messages[0].content = simplifiedSystemPrompt
+      debugLog(`🔧 [DEBUG] queryLocalModel - Simplified system prompt from ${originalSystemPrompt.length} to ${simplifiedSystemPrompt.length} characters`)
     }
 
     debugLog(`📤 [DEBUG] queryLocalModel - Built request with ${localMessages.length} messages`)

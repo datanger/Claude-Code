@@ -6,6 +6,7 @@ import {
   getImageFromClipboard,
   CLIPBOARD_ERROR_MESSAGE,
 } from '../utils/imagePaste.js'
+import { isBackspaceSequence } from '../utils/terminalSetup.js'
 
 const IMAGE_PLACEHOLDER = '[Image pasted]'
 
@@ -253,6 +254,11 @@ export function useTextInput({
         return () => cursor.right()
     }
     return function (input: string) {
+      // Use the new terminal detection to handle backspace sequences
+      if (isBackspaceSequence(input)) {
+        return cursor.backspace()
+      }
+      
       switch (true) {
         // Home key
         case input == '\x1b[H' || input == '\x1b[1~':

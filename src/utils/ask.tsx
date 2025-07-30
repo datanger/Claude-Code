@@ -43,7 +43,7 @@ export async function ask({
   totalCost: number
   messageHistoryFile: string
 }> {
-  debugLog(`🤖 [DEBUG] ask() function started`)
+  
   debugLog(`📝 [DEBUG] Processing prompt: "${prompt}"`)
   debugLog(`📁 [DEBUG] Working directory: ${cwd}`)
   debugLog(`🔧 [DEBUG] Available tools: ${tools.map(t => t.name).join(', ')}`)
@@ -95,6 +95,13 @@ export async function ask({
   debugLog(`🌐 [DEBUG] About to call query() function (LLM API call)...`)
   debugLog(`⏱️ [DEBUG] LLM API call started at: ${new Date().toISOString()}`)
   
+  // 如果指定了 provider，创建一个自定义的 provider 配置
+  const customProviderConfig = provider ? {
+    provider: provider as any,
+    model: finalModel,
+    skipPermissions: provider !== 'anthropic'
+  } : undefined
+  
   for await (const m of query(
     messages,
     systemPrompt,
@@ -110,6 +117,7 @@ export async function ask({
         forkNumber: 0,
         messageLogName: 'unused',
         maxThinkingTokens: 0,
+        customProviderConfig, // 传递自定义 provider 配置
       },
       abortController: new AbortController(),
       messageId: undefined,
@@ -129,29 +137,23 @@ export async function ask({
     throw new Error('Expected content to be an assistant message')
   }
   if (result.message.content[0]?.type !== 'text') {
-    console.error(`❌ [DEBUG] Expected text content but got: ${JSON.stringify(result.message.content[0])}`)
-    throw new Error(
-      `Expected first content item to be text, but got ${JSON.stringify(
-        result.message.content[0],
-        null,
-        2,
-      )}`,
-    )
+    console.error(`❌ [DEBUG] Expected text content but got: ${result.message.content[0]?.type}`)
+    throw new Error('Expected content to be text')
   }
 
-  debugLog(`📝 [DEBUG] Extracted result text, length: ${result.message.content[0].text.length} characters`)
-
-  // Write log that can be retrieved with `claude log`
-  const messageHistoryFile = getMessagesPath(messageLogName, 0, 0)
-  overwriteLog(messageHistoryFile, messages)
-  debugLog(`💾 [DEBUG] Wrote message history to: ${messageHistoryFile}`)
-
+  const resultText = result.message.content[0].text
   const totalCost = getTotalCost()
-  debugLog(`�� [DEBUG] Total cost: ${totalCost}`)
-  debugLog(`📤 [DEBUG] ask() function returning result`)
+  const messageHistoryFile = getMessagesPath(messageLogName)
+
+  debugLog(`📝 [DEBUG] Final result text length: ${resultText.length}`)
+  debugLog(`💰 [DEBUG] Total cost: $${totalCost.toFixed(6)}`)
+  debugLog(`📁 [DEBUG] Message history file: ${messageHistoryFile}`)
+
+  await overwriteLog(messageHistoryFile, messages)
+  debugLog(`💾 [DEBUG] Saved message history to: ${messageHistoryFile}`)
 
   return {
-    resultText: result.message.content[0].text,
+    resultText,
     totalCost,
     messageHistoryFile,
   }
