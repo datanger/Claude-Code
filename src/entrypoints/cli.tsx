@@ -82,7 +82,7 @@ import { showInvalidConfigDialog } from '../components/InvalidConfigDialog.js'
 import { ConfigParseError } from '../utils/errors.js'
 import { grantReadPermissionForOriginalDir } from '../utils/permissions/filesystem.js'
 import { getProviderConfig } from '../utils/provider.js'
-import { debugLog } from '../utils/log.js'
+import { debugLog, setDebugMode } from '../utils/log.js'
 
 export function completeOnboarding(): void {
   const config = getGlobalConfig()
@@ -361,12 +361,22 @@ ${commandList}`,
     )
     .option(
       '--provider <provider>',
-      'Specify LLM provider (anthropic, openai, deepseek)',
+      'Specify LLM provider (anthropic, openai, deepseek, local)',
       String,
     )
     .option(
       '--model <model>',
-      'Specify LLM model (e.g., claude-3-5-sonnet, gpt-4, deepseek-chat)',
+      'Specify LLM model (e.g., claude-3-5-sonnet, gpt-4o, DeepSeek-V3-W8A8, deepseek-chat)',
+      String,
+    )
+    .option(
+      '--api-key <key>',
+      'API key for the selected provider (or set {PROVIDER}_API_KEY environment variable)',
+      String,
+    )
+    .option(
+      '--api-base <url>',
+      'Base URL for the selected provider (or set {PROVIDER}_API_BASE environment variable)',
       String,
     )
     .action(
@@ -381,11 +391,15 @@ ${commandList}`,
           dangerouslySkipPermissions,
           provider,
           model,
+          apiKey,
+          apiBase,
         },
       ) => {
+        // 首先设置debug模式，确保debugLog能正确工作
         if (debug) {
-          process.env.DEBUG = 'true'
+          setDebugMode(true)
         }
+        
         await showSetupScreens(dangerouslySkipPermissions, print)
         logEvent('tengu_init', {
           entrypoint: 'claude',
@@ -397,7 +411,47 @@ ${commandList}`,
           print: print?.toString() ?? 'false',
           provider: provider || 'auto',
           model: model || 'auto',
+          apiBase: apiBase || 'not set',
         })
+        
+        // Set environment variables for the selected provider if provided
+        if (apiKey) {
+          if (provider) {
+            // 如果指定了provider，使用对应的环境变量名
+            const providerPrefix = provider.toUpperCase()
+            process.env[`${providerPrefix}_API_KEY`] = apiKey
+            debugLog(`🔧 [DEBUG] Set ${providerPrefix}_API_KEY environment variable`)
+          } else {
+            // 如果没有指定provider，设置所有可能的API key
+            process.env.ANTHROPIC_API_KEY = apiKey
+            process.env.OPENAI_API_KEY = apiKey
+            process.env.DEEPSEEK_API_KEY = apiKey
+            process.env.LOCAL_MODEL_API_KEY = apiKey
+            debugLog(`🔧 [DEBUG] Set API keys for all providers`)
+          }
+        }
+        
+        if (apiBase) {
+          if (provider) {
+            // 如果指定了provider，使用对应的环境变量名
+            const providerPrefix = provider.toUpperCase()
+            if (providerPrefix === 'LOCAL') {
+              process.env.LOCAL_MODEL_BASE = apiBase
+              debugLog(`🔧 [DEBUG] Set LOCAL_MODEL_BASE environment variable`)
+            } else {
+              process.env[`${providerPrefix}_API_BASE`] = apiBase
+              debugLog(`🔧 [DEBUG] Set ${providerPrefix}_API_BASE environment variable`)
+            }
+          } else {
+            // 如果没有指定provider，设置所有可能的base URL
+            process.env.ANTHROPIC_BASE_URL = apiBase
+            process.env.OPENAI_API_BASE = apiBase
+            process.env.DEEPSEEK_API_BASE = apiBase
+            process.env.LOCAL_MODEL_BASE = apiBase
+            debugLog(`🔧 [DEBUG] Set API base URLs for all providers`)
+          }
+        }
+        
         await setup(cwd, dangerouslySkipPermissions)
 
         assertMinVersion()

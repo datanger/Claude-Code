@@ -7,7 +7,7 @@ import { addToTotalCost } from '../cost-tracker.js'
 import type { AssistantMessage, UserMessage } from '../query.js'
 import { Tool } from '../Tool.js'
 import { getOpenAIApiKey, getOrCreateUserID } from '../utils/config.js'
-import { logError, SESSION_ID } from '../utils/log.js'
+import { debugLog } from '../utils/log.js'
 import { USER_AGENT } from '../utils/http.js'
 import {
   createAssistantAPIErrorMessage,
@@ -66,7 +66,7 @@ async function withRetry<T>(
       }
 
       const delayMs = getRetryDelay(attempt)
-      console.log(
+      debugLog(
         `  ⎿  ${chalk.red(`OpenAI API ${error?.message || error} · Retrying in ${Math.round(delayMs / 1000)} seconds… (attempt ${attempt}/${maxRetries})`)}`,
       )
 
@@ -94,7 +94,7 @@ export async function verifyOpenAIApiKey(apiKey: string): Promise<boolean> {
     }, { maxRetries: 2 })
     return true
   } catch (error) {
-    logError(error)
+    debugLog(error)
     if (error?.status === 401) {
       return false
     }
@@ -105,13 +105,40 @@ export async function verifyOpenAIApiKey(apiKey: string): Promise<boolean> {
 let openaiClient: OpenAI | null = null
 
 export function getOpenAIClient(model: string): OpenAI {
-  if (!openaiClient) {
-    openaiClient = new OpenAI({
-      apiKey: getOpenAIApiKey()!,
-      maxRetries: 3,
-      dangerouslyAllowBrowser: true, // 添加这个选项解决环境警告
-    })
+  const apiKey = getOpenAIApiKey()!
+  const baseURL = process.env.OPENAI_API_BASE || 'https://api.openai.com'
+  
+  // 检查是否需要重新创建客户端（当环境变量改变时）
+  if (openaiClient) {
+    const currentConfig = {
+      apiKey,
+      baseURL,
+    }
+    
+    // 如果配置没有改变，直接返回现有客户端
+    if (openaiClient.apiKey === apiKey && 
+        (!baseURL || openaiClient.baseURL === baseURL)) {
+      return openaiClient
+    }
+    
+    // 如果配置改变了，重置客户端
+    debugLog(`🔄 [DEBUG] OpenAI configuration changed, recreating client`)
+    openaiClient = null
   }
+  
+  const clientConfig: any = {
+    apiKey,
+    maxRetries: 3,
+    dangerouslyAllowBrowser: true, // 添加这个选项解决环境警告
+  }
+  
+  // 如果设置了baseURL，则添加到配置中
+  if (baseURL) {
+    clientConfig.baseURL = baseURL
+    debugLog(`🔧 [DEBUG] Using OpenAI base URL: ${baseURL}`)
+  }
+  
+  openaiClient = new OpenAI(clientConfig)
   return openaiClient
 }
 
@@ -192,14 +219,14 @@ export async function queryGPT(
     prependCLISysprompt: boolean
   },
 ): Promise<AssistantMessage> {
-  console.log(`🌐 [DEBUG] queryGPT() function started`)
-  console.log(`📨 [DEBUG] Messages count: ${messages.length}`)
-  console.log(`📝 [DEBUG] System prompt items: ${systemPrompt.length}`)
-  console.log(`🤔 [DEBUG] Max thinking tokens: ${maxThinkingTokens}`)
-  console.log(`🔧 [DEBUG] Tools count: ${tools.length}`)
-  console.log(`🔐 [DEBUG] dangerouslySkipPermissions: ${options.dangerouslySkipPermissions}`)
-  console.log(`🤖 [DEBUG] Model: ${options.model}`)
-  console.log(`📋 [DEBUG] prependCLISysprompt: ${options.prependCLISysprompt}`)
+  debugLog(`🌐 [DEBUG] queryGPT() function started`)
+  debugLog(`📨 [DEBUG] Messages count: ${messages.length}`)
+  debugLog(`📝 [DEBUG] System prompt items: ${systemPrompt.length}`)
+  debugLog(`🤔 [DEBUG] Max thinking tokens: ${maxThinkingTokens}`)
+  debugLog(`🔧 [DEBUG] Tools count: ${tools.length}`)
+  debugLog(`🔐 [DEBUG] dangerouslySkipPermissions: ${options.dangerouslySkipPermissions}`)
+  debugLog(`🤖 [DEBUG] Model: ${options.model}`)
+  debugLog(`📋 [DEBUG] prependCLISysprompt: ${options.prependCLISysprompt}`)
 
   const openai = getOpenAIClient(options.model)
   
@@ -216,7 +243,7 @@ export async function queryGPT(
     }
   }))
   
-  console.log(`🛠️ [DEBUG] Tool schemas count: ${toolSchemas.length}`)
+  debugLog(`🛠️ [DEBUG] Tool schemas count: ${toolSchemas.length}`)
 
   const messageParams = messages.map(m =>
     m.type === 'user'
@@ -224,28 +251,28 @@ export async function queryGPT(
       : assistantMessageToMessageParam(m),
   )
 
-  console.log(`📨 [DEBUG] Message params count: ${messageParams.length}`)
-  console.log(`📊 [DEBUG] Total tokens estimate: ${JSON.stringify([system, ...messageParams, ...toolSchemas]).length}`)
+  debugLog(`📨 [DEBUG] Message params count: ${messageParams.length}`)
+  debugLog(`📊 [DEBUG] Total tokens estimate: ${JSON.stringify([system, ...messageParams, ...toolSchemas]).length}`)
 
   const startIncludingRetries = Date.now()
   let start = Date.now()
   let attemptNumber = 0
   let response
   
-  console.log(`🚀 [DEBUG] About to call openai.chat.completions.create...`)
-  console.log(`⏱️ [DEBUG] API call started at: ${new Date().toISOString()}`)
+  debugLog(`🚀 [DEBUG] About to call openai.chat.completions.create...`)
+  debugLog(`⏱️ [DEBUG] API call started at: ${new Date().toISOString()}`)
   
   try {
     response = await withRetry(async attempt => {
       attemptNumber = attempt
       start = Date.now()
-      console.log(`🔄 [DEBUG] API call attempt ${attempt} started`)
+      debugLog(`🔄 [DEBUG] API call attempt ${attempt} started`)
       
-      console.log(`🌐 [DEBUG] Calling openai.chat.completions.create with:`)
-      console.log(`   - Model: ${options.model}`)
-      console.log(`   - Max tokens: ${Math.max(maxThinkingTokens + 1, 4096)}`)
-      console.log(`   - Messages count: ${messageParams.length}`)
-      console.log(`   - Tools count: ${toolSchemas.length}`)
+      debugLog(`🌐 [DEBUG] Calling openai.chat.completions.create with:`)
+      debugLog(`   - Model: ${options.model}`)
+      debugLog(`   - Max tokens: ${Math.max(maxThinkingTokens + 1, 4096)}`)
+      debugLog(`   - Messages count: ${messageParams.length}`)
+      debugLog(`   - Tools count: ${toolSchemas.length}`)
       
       const stream = await openai.chat.completions.create(
         {
@@ -262,7 +289,7 @@ export async function queryGPT(
         { signal },
       )
       
-      console.log(`✅ [DEBUG] openai.chat.completions.create call initiated successfully`)
+      debugLog(`✅ [DEBUG] openai.chat.completions.create call initiated successfully`)
       
       // 处理流式响应
       let finalResponse: any = null
@@ -291,22 +318,22 @@ export async function queryGPT(
       return finalResponse
     })
     
-    console.log(`✅ [DEBUG] API call completed successfully`)
-    console.log(`⏱️ [DEBUG] API call finished at: ${new Date().toISOString()}`)
+    debugLog(`✅ [DEBUG] API call completed successfully`)
+    debugLog(`⏱️ [DEBUG] API call finished at: ${new Date().toISOString()}`)
   } catch (error) {
-    console.error(`❌ [DEBUG] API call failed: ${error}`)
-    logError(error)
+    debugLog(`❌ [DEBUG] API call failed: ${error}`)
+    debugLog(error)
     return getAssistantMessageFromError(error)
   }
   
   const durationMs = Date.now() - start
   const durationMsIncludingRetries = Date.now() - startIncludingRetries
   
-  console.log(`📊 [DEBUG] API call statistics:`)
-  console.log(`   - Duration: ${durationMs}ms`)
-  console.log(`   - Duration including retries: ${durationMsIncludingRetries}ms`)
-  console.log(`   - Input tokens: ${response.usage?.prompt_tokens || 0}`)
-  console.log(`   - Output tokens: ${response.usage?.completion_tokens || 0}`)
+  debugLog(`📊 [DEBUG] API call statistics:`)
+  debugLog(`   - Duration: ${durationMs}ms`)
+  debugLog(`   - Duration including retries: ${durationMsIncludingRetries}ms`)
+  debugLog(`   - Input tokens: ${response.usage?.prompt_tokens || 0}`)
+  debugLog(`   - Output tokens: ${response.usage?.completion_tokens || 0}`)
   
   // 成本计算
   const inputTokens = response.usage?.prompt_tokens || 0
@@ -319,7 +346,7 @@ export async function queryGPT(
     : (inputTokens / 1_000_000) * GPT35_COST_PER_MILLION_INPUT_TOKENS +
       (outputTokens / 1_000_000) * GPT35_COST_PER_MILLION_OUTPUT_TOKENS
 
-  console.log(`💰 [DEBUG] Cost calculation: $${costUSD.toFixed(6)}`)
+  debugLog(`💰 [DEBUG] Cost calculation: $${costUSD.toFixed(6)}`)
   addToTotalCost(costUSD, durationMsIncludingRetries)
 
   // 转换为 AssistantMessage 格式

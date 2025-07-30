@@ -17,7 +17,7 @@ const stickerRequestSchema = z.object({
 export const StickerRequestTool: Tool = {
   name: 'StickerRequest',
   userFacingName: () => 'Stickers',
-  description: async () => DESCRIPTION,
+  description: DESCRIPTION,
   inputSchema: stickerRequestSchema,
   isEnabled: async () => {
     const enabled = await checkGate('tengu_sticker_easter_egg')

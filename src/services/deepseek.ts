@@ -27,22 +27,34 @@ export function getDeepSeekApiKey(): null | string {
  * 获取 DeepSeek 客户端实例
  */
 export function getDeepSeekClient(model: string): OpenAI {
-  if (!deepseekClient) {
-    const apiKey = getDeepSeekApiKey()
-    if (!apiKey) {
-      throw new Error('DeepSeek API key not found. Please set DEEPSEEK_API_KEY environment variable.')
-    }
-
-    deepseekClient = new OpenAI({
-      apiKey,
-      baseURL: DEEPSEEK_API_BASE,
-      maxRetries: 3,
-      dangerouslyAllowBrowser: true, // 添加这个选项解决环境警告
-    })
-    
-    console.log(`🔧 [DEBUG] Created DeepSeek client with base URL: ${DEEPSEEK_API_BASE}`)
+  const apiKey = getDeepSeekApiKey()
+  if (!apiKey) {
+    throw new Error('DeepSeek API key not found. Please set DEEPSEEK_API_KEY environment variable.')
   }
   
+  const baseURL = process.env.DEEPSEEK_API_BASE || 'https://api.deepseek.com'
+  
+  // 检查是否需要重新创建客户端（当环境变量改变时）
+  if (deepseekClient) {
+    // 如果配置没有改变，直接返回现有客户端
+    if (deepseekClient.apiKey === apiKey && 
+        deepseekClient.baseURL === baseURL) {
+      return deepseekClient
+    }
+    
+    // 如果配置改变了，重置客户端
+    console.log(`🔄 [DEBUG] DeepSeek configuration changed, recreating client`)
+    deepseekClient = null
+  }
+
+  deepseekClient = new OpenAI({
+    apiKey,
+    baseURL: baseURL,
+    maxRetries: 3,
+    dangerouslyAllowBrowser: true, // 添加这个选项解决环境警告
+  })
+  
+  console.log(`🔧 [DEBUG] Created DeepSeek client with base URL: ${baseURL}`)
   return deepseekClient
 }
 
@@ -279,6 +291,27 @@ export async function queryDeepSeek(
     
     debugLog(`🛠️ [DEBUG] Converted ${openaiTools.length} tools to OpenAI format`)
     
+    // 根据模型类型设置max_tokens
+    const getMaxTokensForDeepSeekModel = (model: string): number => {
+      const lowerModel = model.toLowerCase()
+      if (lowerModel.includes('v3')) {
+        return 128000  // DeepSeek V3 支持128K
+      }
+      if (lowerModel.includes('v2.5')) {
+        return 128000  // DeepSeek V2.5 支持128K
+      }
+      if (lowerModel.includes('coder')) {
+        return 32000   // DeepSeek Coder 支持32K
+      }
+      if (lowerModel.includes('chat')) {
+        return 32000   // DeepSeek Chat 支持32K
+      }
+      return 32000     // 默认32K
+    }
+    
+    const maxTokens = getMaxTokensForDeepSeekModel(options.model)
+    debugLog(`🔧 [DEBUG] DeepSeek model: ${options.model}, max_tokens: ${maxTokens}`)
+    
     // 调用 DeepSeek API
     debugLog(`🌐 [DEBUG] Calling DeepSeek API...`)
     const response = await client.chat.completions.create({
@@ -286,7 +319,7 @@ export async function queryDeepSeek(
       messages: openaiMessages,
       tools: openaiTools.length > 0 ? openaiTools : undefined,
       tool_choice: openaiTools.length > 0 ? 'auto' : undefined,
-      max_tokens: 4096,
+      max_tokens: maxTokens,
       temperature: 0,
       stream: false,
     }, {

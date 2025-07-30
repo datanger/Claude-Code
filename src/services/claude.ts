@@ -34,6 +34,14 @@ import { getVertexRegionForModel } from '../utils/model.js'
 
 interface StreamResponse extends APIMessage {
   ttftMs?: number
+  usage?: {
+    input_tokens: number
+    output_tokens: number
+    cache_read_input_tokens?: number
+    cache_creation_input_tokens?: number
+  }
+  content?: any
+  stop_reason?: string
 }
 
 export const API_ERROR_MESSAGE_PREFIX = 'API Error'
@@ -235,10 +243,6 @@ let anthropicClient: Anthropic | null = null
  * Get the Anthropic client, creating it if it doesn't exist
  */
 export function getAnthropicClient(model?: string): Anthropic {
-  if (anthropicClient) {
-    return anthropicClient
-  }
-
   const region = getVertexRegionForModel(model)
 
   const defaultHeaders: { [key: string]: string } = {
@@ -278,11 +282,35 @@ export function getAnthropicClient(model?: string): Anthropic {
       ),
     )
   }
-  anthropicClient = new Anthropic({
+  
+  const baseURL = process.env.ANTHROPIC_BASE_URL
+  
+  // 检查是否需要重新创建客户端（当环境变量改变时）
+  if (anthropicClient) {
+    // 如果配置没有改变，直接返回现有客户端
+    if (anthropicClient.apiKey === apiKey && 
+        (!baseURL || anthropicClient.baseURL === baseURL)) {
+      return anthropicClient
+    }
+    
+    // 如果配置改变了，重置客户端
+    console.log(`🔄 [DEBUG] Anthropic configuration changed, recreating client`)
+    anthropicClient = null
+  }
+  
+  const clientConfig: any = {
     apiKey,
     dangerouslyAllowBrowser: true,
     ...ARGS,
-  })
+  }
+  
+  // 如果设置了baseURL，则添加到配置中
+  if (baseURL) {
+    clientConfig.baseURL = baseURL
+    console.log(`🔧 [DEBUG] Using Anthropic base URL: ${baseURL}`)
+  }
+  
+  anthropicClient = new Anthropic(clientConfig)
   return anthropicClient
 }
 

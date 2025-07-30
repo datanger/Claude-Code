@@ -1,4 +1,6 @@
-export type LLMProvider = 'anthropic' | 'openai' | 'deepseek'
+import { debugLog } from './log.js'
+
+export type LLMProvider = 'anthropic' | 'openai' | 'deepseek' | 'local'
 
 export interface ProviderConfig {
   provider: LLMProvider
@@ -10,13 +12,38 @@ export interface ProviderConfig {
  * 根据模型名称自动选择 LLM 提供商
  */
 export function getProviderFromModel(model: string): LLMProvider {
-  if (model.includes('gpt-') || model.includes('openai')) {
+  debugLog(`🔍 [DEBUG] getProviderFromModel - Input model: ${model}`)
+  
+  // 优先检查local支持的模型
+  const localSupportedModels = [
+    'DeepSeek-V3-W8A8', 'deepseek-chat', 'gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'
+  ]
+  
+  if (localSupportedModels.includes(model)) {
+    debugLog(`✅ [DEBUG] getProviderFromModel - Model ${model} matched local supported models, returning 'local'`)
+    return 'local'
+  }
+  
+  // 检查OpenAI模型模式
+  if (model.startsWith('gpt-')) {
+    debugLog(`✅ [DEBUG] getProviderFromModel - Model ${model} matched OpenAI pattern, returning 'openai'`)
     return 'openai'
   }
-  if (model.includes('deepseek')) {
+  
+  // 检查local模型模式
+  if (model.startsWith('local-')) {
+    debugLog(`✅ [DEBUG] getProviderFromModel - Model ${model} matched local pattern, returning 'local'`)
+    return 'local'
+  }
+  
+  // 检查DeepSeek模型模式
+  if (model.startsWith('deepseek-') || model.includes('deepseek')) {
+    debugLog(`✅ [DEBUG] getProviderFromModel - Model ${model} matched DeepSeek pattern, returning 'deepseek'`)
     return 'deepseek'
   }
-  // 默认使用 anthropic
+  
+  // 默认返回anthropic
+  debugLog(`✅ [DEBUG] getProviderFromModel - Model ${model} defaulting to 'anthropic'`)
   return 'anthropic'
 }
 
@@ -25,7 +52,7 @@ export function getProviderFromModel(model: string): LLMProvider {
  * 非 Anthropic 提供商默认跳过权限验证
  */
 export function shouldSkipPermissions(provider: LLMProvider): boolean {
-  return provider === 'openai' || provider === 'deepseek'
+  return provider === 'openai' || provider === 'deepseek' || provider === 'local'
 }
 
 /**
@@ -59,11 +86,19 @@ export function isModelSupported(model: string): boolean {
     // DeepSeek 支持的模型
     const deepseekModels = [
       'deepseek-chat', 'deepseek-coder', 'deepseek-reasoner',
-      'deepseek-v2.5', 'deepseek-v2.5-chat', 'deepseek-v2.5-coder'
+      'deepseek-v2.5', 'deepseek-v2.5-chat', 'deepseek-v2.5-coder',
     ]
     return deepseekModels.some(supported => model.includes(supported))
   }
   
+  if (provider === 'local') {
+    // Local provider 支持的模型
+    const localModels = [
+      'DeepSeek-V3-W8A8', 'deepseek-chat', 'gpt-4o', 'gpt-4o-mini'
+    ]
+    return localModels.some(supported => model.includes(supported)) || true // 也支持其他任何模型
+  }
+
   if (provider === 'anthropic') {
     // Anthropic 支持的模型
     const anthropicModels = [

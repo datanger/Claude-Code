@@ -381,11 +381,19 @@ export function logMCPError(serverName: string, error: unknown): void {
   }
 }
 
-// Debug log 开关，可通过环境变量 DEBUG 或 LOG_LEVEL 控制
-export const isDebug = process.env.DEBUG === 'true' || process.env.LOG_LEVEL === 'debug'
+// Debug log 开关，可通过环境变量 DEBUG 或 LOG_LEVEL 控制，或者通过全局状态
+let globalDebugMode = process.env.DEBUG === 'true' || process.env.LOG_LEVEL === 'debug'
 
-export function debugLog(...args: any[]) {
-  if (isDebug) {
+export function setDebugMode(enabled: boolean): void {
+  globalDebugMode = enabled
+}
+
+export function isDebugMode(): boolean {
+  return globalDebugMode
+}
+
+export function debugLog(...args: any[]): void {
+  if (globalDebugMode) {
     console.log(...args)
   }
 }

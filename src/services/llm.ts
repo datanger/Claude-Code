@@ -4,6 +4,8 @@ import { getProviderConfig, type LLMProvider } from '../utils/provider.js'
 import { querySonnet } from './claude.js'
 import { queryGPT } from './openai.js'
 import { queryDeepSeek } from './deepseek.js'
+import { queryLocalModel } from './local_model.js'
+import { debugLog } from '../utils/log.js'
 
 export interface LLMQueryOptions {
   dangerouslySkipPermissions: boolean
@@ -23,11 +25,22 @@ export async function queryLLM(
   signal: AbortSignal,
   options: LLMQueryOptions,
 ): Promise<AssistantMessage> {
+  debugLog(`🚀 [DEBUG] queryLLM - Starting with model: ${options.model}`)
+  debugLog(`🚀 [DEBUG] queryLLM - Messages count: ${messages.length}`)
+  debugLog(`🚀 [DEBUG] queryLLM - System prompt items: ${systemPrompt.length}`)
+  debugLog(`🚀 [DEBUG] queryLLM - Tools count: ${tools.length}`)
+  
   const providerConfig = getProviderConfig(options.model)
+  debugLog(`🔍 [DEBUG] queryLLM - Provider config:`, {
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    skipPermissions: providerConfig.skipPermissions
+  })
   
   // 根据提供商选择对应的查询函数
   switch (providerConfig.provider) {
     case 'openai':
+      debugLog(`✅ [DEBUG] queryLLM - Routing to queryGPT`)
       return await queryGPT(
         messages,
         systemPrompt,
@@ -40,7 +53,22 @@ export async function queryLLM(
         }
       )
     
+    case 'local':
+      debugLog(`✅ [DEBUG] queryLLM - Routing to queryLocalModel`)
+      return await queryLocalModel(
+        messages,
+        systemPrompt,
+        maxThinkingTokens,
+        tools,
+        signal,
+        {
+          ...options,
+          dangerouslySkipPermissions: providerConfig.skipPermissions || options.dangerouslySkipPermissions,
+        },
+      )
+
     case 'deepseek':
+      debugLog(`✅ [DEBUG] queryLLM - Routing to queryDeepSeek`)
       return await queryDeepSeek(
         messages,
         systemPrompt,
@@ -55,6 +83,7 @@ export async function queryLLM(
     
     case 'anthropic':
     default:
+      debugLog(`✅ [DEBUG] queryLLM - Routing to querySonnet`)
       return await querySonnet(
         messages,
         systemPrompt,
@@ -78,6 +107,9 @@ export async function verifyApiKey(apiKey: string, provider: LLMProvider): Promi
       const { verifyOpenAIApiKey } = await import('./openai.js')
       return await verifyOpenAIApiKey(apiKey)
     
+    case 'local':
+      return true
+
     case 'deepseek':
       const { verifyDeepSeekApiKey } = await import('./deepseek.js')
       return await verifyDeepSeekApiKey(apiKey)
@@ -100,6 +132,9 @@ export function getLLMClient(model: string) {
       const { getOpenAIClient } = require('./openai.js')
       return getOpenAIClient(model)
     
+    case 'local':
+      return null
+
     case 'deepseek':
       const { getDeepSeekClient } = require('./deepseek.js')
       return getDeepSeekClient(model)
