@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import type { AssistantMessage, UserMessage } from '../query.js'
 import type { Tool } from '../Tool.js'
 import { debugLog, logError } from '../utils/log.js'
+import { zodToJsonSchema } from 'zod-to-json-schema'
 // @ts-ignore
 import jwt from 'jsonwebtoken'
 
@@ -70,6 +71,7 @@ interface LocalRequest {
   presence_penalty?: number
   frequency_penalty?: number
   tools?: LocalTool[]
+  tool_choice?: string
 }
 
 interface LocalStreamDelta {
@@ -168,6 +170,9 @@ function assistantMessageToLocal(message: AssistantMessage): LocalMessage {
   for (const part of message.message.content) {
     if (part.type === 'text') {
       segments.push(part.text)
+    } else if (part.type === 'tool_use') {
+      // 处理工具调用
+      segments.push(`[ToolCall] ${part.name}: ${JSON.stringify(part.input)}`)
     } else if ('functionCall' in part) {
       segments.push('[FunctionCall] ' + JSON.stringify(part.functionCall))
     } else if ('functionResponse' in part) {
@@ -184,6 +189,53 @@ function toolsToLocal(tools: Tool[]): LocalTool[] {
     return [];
   }
 
+  // 添加参数标准化函数，参考 localAdapter.ts
+  const normalizeParameters = (parameters: unknown): Record<string, unknown> => {
+    if (!parameters) {
+      return {};
+    }
+
+    const normalizeType = (type: string): string => {
+      const typeMap: Record<string, string> = {
+        'STRING': 'string',
+        'NUMBER': 'number',
+        'BOOLEAN': 'boolean',
+        'OBJECT': 'object',
+        'ARRAY': 'array',
+        'INTEGER': 'integer'
+      };
+      return typeMap[type] || type;
+    };
+
+    const normalizeSchema = (schema: unknown): Record<string, unknown> => {
+      if (typeof schema !== 'object' || schema === null) {
+        return {};
+      }
+
+      const normalized = { ...schema as Record<string, unknown> };
+
+      if ('type' in normalized && typeof normalized.type === 'string') {
+        normalized.type = normalizeType(normalized.type as string);
+      }
+
+      if ('items' in normalized) {
+        normalized.items = normalizeSchema(normalized.items);
+      }
+
+      if ('properties' in normalized && normalized.properties && typeof normalized.properties === 'object') {
+        const normalizedProperties: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(normalized.properties as Record<string, unknown>)) {
+          normalizedProperties[key] = normalizeSchema(value);
+        }
+        normalized.properties = normalizedProperties;
+      }
+
+      return normalized;
+    };
+
+    return normalizeSchema(parameters);
+  };
+
   return tools.map(tool => {
     // 获取工具的schema - 工具可能使用inputSchema而不是schema
     let schema = (tool as any).schema;
@@ -191,88 +243,39 @@ function toolsToLocal(tools: Tool[]): LocalTool[] {
       schema = (tool as any).inputSchema;
     }
     
-    // 处理 Claude Code 格式的 Tool - 参考 localAdapter.ts
-    const normalizedTool = {
+    // 如果schema是Zod schema，转换为JSON Schema
+    if (schema && typeof schema === 'object' && schema._def) {
+      try {
+        schema = zodToJsonSchema(schema);
+        debugLog(`🔧 [DEBUG] Converted Zod schema for tool ${tool.name}:`, JSON.stringify(schema, null, 2));
+      } catch (error) {
+        debugLog(`⚠️ [DEBUG] Failed to convert Zod schema for tool ${tool.name}:`, error);
+        schema = { type: 'object', properties: {} };
+      }
+    }
+    
+    // 标准化参数格式
+    const normalizedParameters = normalizeParameters(schema);
+    debugLog(`🔧 [DEBUG] Normalized parameters for tool ${tool.name}:`, JSON.stringify(normalizedParameters, null, 2));
+    
+    // 处理description - 应该是字符串，如果工具定义中有description函数，使用默认描述
+    let description = '';
+    if (typeof tool.description === 'string') {
+      description = tool.description;
+    } else {
+      // 如果description是函数，使用工具名称作为默认描述
+      description = `Tool: ${tool.name}`;
+    }
+    
+    return {
       type: 'function' as const,
       function: {
         name: tool.name,
-        description: tool.description || '',
-        parameters: normalizeParameters(schema || {})
+        description: description,
+        parameters: normalizedParameters
       }
     };
-    
-    debugLog(`🔧 [DEBUG] toolsToLocal - Converting tool: ${tool.name}`)
-    debugLog(`🔧 [DEBUG] toolsToLocal - Tool schema:`, JSON.stringify(schema || {}, null, 2))
-    
-    return normalizedTool;
   });
-}
-
-/**
- * 标准化参数格式 - 参考 localAdapter.ts 的 normalizeParameters
- */
-function normalizeParameters(parameters: unknown): Record<string, unknown> {
-  if (!parameters) {
-    return {};
-  }
-
-  // 如果是Zod schema对象，尝试提取其结构
-  if (typeof parameters === 'object' && parameters !== null) {
-    const zodObj = parameters as any;
-    
-    // 检查是否是Zod对象
-    if (zodObj._def && zodObj._def.typeName === 'ZodObject') {
-      debugLog(`🔧 [DEBUG] normalizeParameters - Detected Zod schema, converting to JSON Schema`)
-      
-      // 为Zod schema创建一个基本的JSON Schema结构
-      return {
-        type: 'object',
-        properties: {},
-        required: [],
-        additionalProperties: false
-      };
-    }
-  }
-
-  const normalizeType = (type: string): string => {
-    const typeMap: Record<string, string> = {
-      'STRING': 'string',
-      'NUMBER': 'number',
-      'BOOLEAN': 'boolean',
-      'OBJECT': 'object',
-      'ARRAY': 'array',
-      'INTEGER': 'integer'
-    };
-    return typeMap[type] || type;
-  };
-
-  const normalizeSchema = (schema: unknown): Record<string, unknown> => {
-    if (typeof schema !== 'object' || schema === null) {
-      return {};
-    }
-
-    const normalized = { ...schema as Record<string, unknown> };
-
-    if ('type' in normalized && typeof normalized.type === 'string') {
-      normalized.type = normalizeType(normalized.type as string);
-    }
-
-    if ('items' in normalized) {
-      normalized.items = normalizeSchema(normalized.items);
-    }
-
-    if ('properties' in normalized && normalized.properties && typeof normalized.properties === 'object') {
-      const normalizedProperties: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(normalized.properties as Record<string, unknown>)) {
-        normalizedProperties[key] = normalizeSchema(value);
-      }
-      normalized.properties = normalizedProperties;
-    }
-
-    return normalized;
-  };
-
-  return normalizeSchema(parameters);
 }
 
 /**
@@ -330,49 +333,48 @@ function adjustRequestForModel(requestObj: any, modelType: string): void {
     case 'deepseek-coder':
       // DeepSeek 特定配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      // 移除 top_p，因为可能导致服务器返回空响应
-      // requestObj.top_p = requestObj.top_p ?? 0.95;
+      requestObj.top_p = requestObj.top_p ?? 0.95; // 修正为 0.95
       break;
       
     case 'gpt':
       // OpenAI 兼容配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      // requestObj.top_p = requestObj.top_p ?? 1;
+      requestObj.top_p = requestObj.top_p ?? 1; // 修正为 1
       break;
       
     case 'claude':
       // Claude 配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      // requestObj.top_p = requestObj.top_p ?? 0.9;
+      requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
       
     case 'llama':
       // Llama 配置
       requestObj.temperature = requestObj.temperature ?? 0.8;
-      // requestObj.top_p = requestObj.top_p ?? 0.9;
+      requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
       
     case 'qwen':
       // Qwen 配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      // requestObj.top_p = requestObj.top_p ?? 0.9;
+      requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
       
     case 'chatglm':
       // ChatGLM 配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      // requestObj.top_p = requestObj.top_p ?? 0.9;
+      requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
       
     default:
       // 通用配置
       requestObj.temperature = requestObj.temperature ?? 0.7;
-      // requestObj.top_p = requestObj.top_p ?? 0.9;
+      requestObj.top_p = requestObj.top_p ?? 0.9;
       break;
   }
   
   debugLog(`🔧 [DEBUG] adjustRequestForModel - Adjusted temperature: ${requestObj.temperature}`)
-  // debugLog(`🔧 [DEBUG] adjustRequestForModel - Adjusted top_p: ${requestObj.top_p}`)
+  debugLog(`🔧 [DEBUG] adjustRequestForModel - Adjusted top_p: ${requestObj.top_p}`)
 }
 
 /**
@@ -382,31 +384,21 @@ async function callLocalModel(request: LocalRequest, signal: AbortSignal): Promi
   const url = LOCAL_MODEL_BASE.replace(/\/+$/, '') + '/chat/completions'
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   
-  // 使用JWT token进行认证
-  const jwtToken = generateJWTToken()
-  headers['Authorization'] = `Bearer ${jwtToken}`
+  // 使用 API Key 进行认证，与 localAdapter.ts 保持一致
+  if (LOCAL_MODEL_API_KEY) {
+    headers['Authorization'] = `Bearer ${LOCAL_MODEL_API_KEY}`
+  }
 
-  debugLog(`🔍 [DEBUG] callLocalModel - URL: ${url}`)
-  debugLog(`🔍 [DEBUG] callLocalModel - Headers:`, JSON.stringify(headers, null, 2))
-  debugLog(`🔍 [DEBUG] callLocalModel - Request body:`, JSON.stringify(request, null, 2))
-  debugLog(`🔍 [DEBUG] callLocalModel - LOCAL_MODEL_BASE: ${LOCAL_MODEL_BASE}`)
-  debugLog(`🔍 [DEBUG] callLocalModel - JWT Token generated: ${jwtToken.substring(0, 20)}...`)
+  // 检查是否是 HTTPS 请求，如果是则设置环境变量忽略 SSL 证书验证 - 参考 localAdapter.ts
+  const isHttps = LOCAL_MODEL_BASE.startsWith('https://');
+  if (isHttps && !process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  }
 
-  // 添加详细的请求数据打印
-  debugLog(`\n📋 [DEBUG] callLocalModel - ===== 完整请求数据 =====`)
-  debugLog(`📋 [DEBUG] callLocalModel - 请求URL: ${url}`)
-  debugLog(`📋 [DEBUG] callLocalModel - 请求方法: POST`)
-  debugLog(`📋 [DEBUG] callLocalModel - 请求Headers:`)
-  Object.entries(headers).forEach(([key, value]) => {
-    debugLog(`📋 [DEBUG] callLocalModel -   ${key}: ${key === 'Authorization' ? value.substring(0, 50) + '...' : value}`)
-  })
-  debugLog(`📋 [DEBUG] callLocalModel - 请求体大小: ${JSON.stringify(request).length} 字符`)
-  debugLog(`📋 [DEBUG] callLocalModel - 请求体内容:`)
-  debugLog(JSON.stringify(request, null, 2))
-  debugLog(`📋 [DEBUG] callLocalModel - ===== 请求数据结束 =====\n`)
+  debugLog(`🔍 [DEBUG] URL: ${url}`)
 
   try {
-    debugLog(`🌐 [DEBUG] callLocalModel - Making fetch request to: ${url}`)
+    debugLog(`🌐 [DEBUG] Making fetch request to: ${url}`)
     
     // 设置超时 - 参考localAdapter.ts的实现
     const timeout = parseInt(process.env.LOCAL_MODEL_TIMEOUT || '30000') // 默认30秒
@@ -425,28 +417,27 @@ async function callLocalModel(request: LocalRequest, signal: AbortSignal): Promi
       signal: combinedSignal.signal,
     }
     
-    debugLog(`🔒 [DEBUG] callLocalModel - Using HTTPS with SSL verification disabled`)
+    debugLog(`🔒 [DEBUG] Using HTTPS with SSL verification disabled`)
     
     const res = await fetch(url, fetchOptions)
     clearTimeout(timeoutId) // 清除超时定时器
     
-    debugLog(`📥 [DEBUG] callLocalModel - Response status: ${res.status}`)
-    debugLog(`📥 [DEBUG] callLocalModel - Response headers:`, JSON.stringify(Object.fromEntries(res.headers.entries()), null, 2))
+    debugLog(`📥 [DEBUG] Response status: ${res.status}`)
+    debugLog(`📥 [DEBUG] Response headers:`, Object.fromEntries(res.headers.entries()))
 
     // 获取响应文本
     const text = await res.text()
-    debugLog(`📥 [DEBUG] callLocalModel - Response text length: ${text.length}`)
-    debugLog(`📥 [DEBUG] callLocalModel - Response text (first 1000 chars):`, text.substring(0, 1000))
-    debugLog(`📥 [DEBUG] callLocalModel - Response text (last 500 chars):`, text.substring(Math.max(0, text.length - 500)))
+    debugLog(`📥 [DEBUG] Response text length: ${text.length}`)
+    debugLog(`📥 [DEBUG] Response text: ${text.substring(0, 500)}${text.length > 500 ? '...' : ''}`)
     
     if (!res.ok) {
-      debugLog(`❌ [DEBUG] callLocalModel - HTTP error ${res.status}: ${text}`)
+      debugLog(`❌ [DEBUG] HTTP error ${res.status}: ${text}`)
       throw new Error(`Local model HTTP error ${res.status}: ${text}`)
     }
     
     // 检查响应是否为空
     if (!text || text.trim().length === 0) {
-      debugLog(`❌ [DEBUG] callLocalModel - Empty response`)
+      debugLog(`❌ [DEBUG] Empty response`)
       throw new Error('Local model returned empty response. Please check if the server is running and accessible.')
     }
     
@@ -471,24 +462,22 @@ async function callLocalModel(request: LocalRequest, signal: AbortSignal): Promi
       }
       
       // 检查 content 是否为空或 null
-      if (!choice.message.content || choice.message.content.trim() === '') {
-        debugLog(`⚠️ [DEBUG] callLocalModel - Choice message content is empty or null`)
-        debugLog(`⚠️ [DEBUG] callLocalModel - Full choice:`, JSON.stringify(choice, null, 2))
+      if (!choice.message?.content || choice.message.content.trim() === '') {
+        debugLog(`⚠️ [DEBUG] Choice message content is empty or null`)
         // 不要抛出错误，而是继续处理，让上层处理空内容
       }
       
-      debugLog(`✅ [DEBUG] callLocalModel - Successfully parsed JSON response`)
+      debugLog(`✅ [DEBUG] Successfully parsed JSON response`)
       return parsed
       
     } catch (err) {
-      debugLog(`❌ [DEBUG] callLocalModel - JSON parse error:`, err)
+      debugLog(`❌ [DEBUG] JSON parse error:`, err)
       throw new Error(`Failed to parse local model JSON: ${err}`)
     }
   } catch (error) {
-    debugLog(`❌ [DEBUG] callLocalModel - Fetch error:`, error)
-    debugLog(`❌ [DEBUG] callLocalModel - Error type:`, typeof error)
-    debugLog(`❌ [DEBUG] callLocalModel - Error message:`, error instanceof Error ? error.message : String(error))
-    debugLog(`❌ [DEBUG] callLocalModel - Error stack:`, error instanceof Error ? error.stack : 'No stack trace')
+    debugLog(`❌ [DEBUG] Fetch error:`, error)
+    debugLog(`❌ [DEBUG] Error type:`, typeof error)
+    debugLog(`❌ [DEBUG] Error message:`, error instanceof Error ? error.message : String(error))
     
     // 参考localAdapter.ts的错误处理
     if (error instanceof Error) {
@@ -522,34 +511,41 @@ export async function queryLocalModel(
   },
 ): Promise<AssistantMessage> {
   const startTime = Date.now()
-  debugLog(`🚀 [DEBUG] queryLocalModel - Starting with model: ${options.model}`)
-  debugLog(`🚀 [DEBUG] queryLocalModel - Messages count: ${messages.length}`)
-  debugLog(`🚀 [DEBUG] queryLocalModel - System prompt items: ${systemPrompt.length}`)
-  debugLog(`🚀 [DEBUG] queryLocalModel - Tools count: ${tools.length}`)
-  debugLog(`🚀 [DEBUG] queryLocalModel - LOCAL_MODEL_BASE: ${LOCAL_MODEL_BASE}`)
-  debugLog(`🚀 [DEBUG] queryLocalModel - LOCAL_MODEL_API_KEY: ${LOCAL_MODEL_API_KEY ? 'set' : 'not set'}`)
+  debugLog(`🚀 [DEBUG] queryLocalModel() started`)
+  debugLog(`🤖 [DEBUG] Model: ${options.model}`)
+  debugLog(`📨 [DEBUG] Messages count: ${messages.length}`)
+  debugLog(`🔧 [DEBUG] Tools count: ${tools.length}`)
+  debugLog(`🔐 [DEBUG] Skip permissions: ${options.dangerouslySkipPermissions}`)
+  debugLog(`🌐 [DEBUG] LOCAL_MODEL_BASE: ${LOCAL_MODEL_BASE}`)
+  debugLog(`🔑 [DEBUG] LOCAL_MODEL_API_KEY: ${LOCAL_MODEL_API_KEY ? 'set' : 'not set'}`)
   
   try {
     // Build messages
     const localMessages: LocalMessage[] = []
     if (systemPrompt.length) {
       localMessages.push({ role: 'system', content: systemPrompt.join('\n\n') })
-      debugLog(`📝 [DEBUG] queryLocalModel - Added system prompt`)
+      debugLog(`📝 [DEBUG] Added system prompt`)
     }
     for (const m of messages) {
       if (m.type === 'user') {
         localMessages.push(userMessageToLocal(m))
-        debugLog(`📝 [DEBUG] queryLocalModel - Added user message: ${typeof m.message.content === 'string' ? m.message.content.substring(0, 50) : 'complex content'}`)
+        // debugLog(`📝 [DEBUG] Added user message: ${typeof m.message.content === 'string' ? m.message.content.substring(0, 50) : 'complex content'}`)
       } else {
         localMessages.push(assistantMessageToLocal(m as AssistantMessage))
-        debugLog(`📝 [DEBUG] queryLocalModel - Added assistant message`)
+        debugLog(`📝 [DEBUG] Added assistant message`)
       }
+    }
+
+    // 如果没有消息，添加默认系统消息 - 参考 localAdapter.ts
+    if (localMessages.length === 0) {
+      localMessages.push({ role: 'system', content: 'You are a helpful assistant.' })
+      debugLog(`📝 [DEBUG] Added default system message`)
     }
 
     // 获取模型名称并检测模型类型
     const modelName = options.model;
     const modelType = detectModelType(modelName);
-    debugLog(`🔧 [DEBUG] queryLocalModel - Model name: ${modelName}, detected type: ${modelType}`)
+    debugLog(`🔧 [DEBUG] Model name: ${modelName}, detected type: ${modelType}`)
 
     // 根据模型类型设置max_tokens - 参考 localAdapter.ts
     const getMaxTokensForLocalModel = (model: string, modelType: string): number => {
@@ -576,19 +572,12 @@ export async function queryLocalModel(
     }
     
     const maxTokens = getMaxTokensForLocalModel(modelName, modelType)
-    debugLog(`🔧 [DEBUG] queryLocalModel - Model: ${modelName}, type: ${modelType}, max_tokens: ${maxTokens}`)
+    debugLog(`🔧 [DEBUG] Model: ${modelName}, type: ${modelType}, max_tokens: ${maxTokens}`)
 
-    // 构造请求体 - 参考 localAdapter.ts 的 convertToLocalRequest
+    // 构造请求体 - 最简单的版本，只包含最基本参数
     const requestObj: any = {
       model: modelName,
       messages: localMessages,
-      stream: false,
-      // 移除 temperature: 0，让 adjustRequestForModel 正确设置
-      max_tokens: 300,  // 使用与curl相同的值
-      // 移除所有服务器不支持的字段
-      // presence_penalty: 0,
-      // frequency_penalty: 0,
-      // top_p: 1,
     };
 
     // 根据模型类型调整请求参数 - 参考 localAdapter.ts
@@ -596,39 +585,54 @@ export async function queryLocalModel(
     
     // 添加工具
     if (tools.length > 0) {
-      const limitedTools = tools.slice(0, 2)
-      debugLog(`🔧 [DEBUG] queryLocalModel - Limiting tools from ${tools.length} to ${limitedTools.length}`)
-      // 暂时移除 tools，因为可能导致服务器返回空响应
-      // requestObj.tools = toolsToLocal(limitedTools)
-      debugLog(`🔧 [DEBUG] queryLocalModel - Temporarily disabled tools to avoid empty response`)
+      // 重新启用 tools
+      const localTools = toolsToLocal(tools) 
+      requestObj.tools = localTools
+      debugLog(`🔧 [DEBUG] Tools enabled: ${localTools.length} tools`)
+      // debugLog(`🔧 [DEBUG] Tools: ${JSON.stringify(localTools, null, 2)}`)
     }
 
-    // 简化 system prompt - 使用简单的 prompt
-    if (requestObj.messages.length > 0 && requestObj.messages[0].role === 'system') {
-      const originalSystemPrompt = requestObj.messages[0].content
-      const simplifiedSystemPrompt = 'You are a helpful assistant.'
-      requestObj.messages[0].content = simplifiedSystemPrompt
-      debugLog(`🔧 [DEBUG] queryLocalModel - Simplified system prompt from ${originalSystemPrompt.length} to ${simplifiedSystemPrompt.length} characters`)
+    // 如果是JSON请求，添加格式要求到系统消息 - 参考 localAdapter.ts
+    const isJsonRequest = false; // 暂时设为 false，因为我们没有 JSON 请求的检测逻辑
+    if (isJsonRequest && localMessages.length > 0) {
+      const lastMessage = localMessages[localMessages.length - 1];
+      if (lastMessage.role === 'user') {
+        lastMessage.content += '\n\n请严格按照JSON格式回复，不要包含任何其他文本，不要使用markdown代码块。';
+        debugLog(`📝 [DEBUG] Added JSON format requirement to last user message`);
+      }
     }
 
-    debugLog(`📤 [DEBUG] queryLocalModel - Built request with ${localMessages.length} messages`)
-    debugLog('🌐 [local_model] Request:', JSON.stringify(requestObj).substring(0, 500))
+    debugLog(`📤 [DEBUG] Converted ${localMessages.length} messages to Local format`)
+    
+    // 添加 DEBUG 日志显示消息内容 - 参照 deepseek.ts
+    debugLog(`📝 [DEBUG] Messages being sent to Local Model:`)
+    localMessages.forEach((msg, index) => {
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+      debugLog(`   [${index}] Role: ${msg.role}, Content: ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`)
+    })
 
-    debugLog(`🌐 [DEBUG] queryLocalModel - Calling callLocalModel...`)
+    // 添加详细的请求体调试信息
+    debugLog(`📤 [DEBUG] Request body being sent:`, JSON.stringify(requestObj, null, 2))
+
+    debugLog(`🌐 [DEBUG] Calling callLocalModel...`)
     const response = await callLocalModel(requestObj, signal)
-    debugLog(`✅ [DEBUG] queryLocalModel - callLocalModel completed successfully`)
+    debugLog(`✅ [DEBUG] Local Model API call successful`)
+    debugLog(`📥 [DEBUG] Response:`, JSON.stringify(response, null, 2))
 
     const durationMs = Date.now() - startTime
-    debugLog(`⏱️ [DEBUG] queryLocalModel - Total duration: ${durationMs}ms`)
+    debugLog(`⏱️ [DEBUG] Total duration: ${durationMs}ms`)
 
     const choice = response.choices[0]
     if (!choice) {
-      debugLog(`❌ [DEBUG] queryLocalModel - No choices in response`)
+      debugLog(`❌ [DEBUG] No choices in response`)
       throw new Error('Local model returned no choices')
     }
 
-    debugLog(`✅ [DEBUG] queryLocalModel - Response has ${response.choices.length} choices`)
-    debugLog(`✅ [DEBUG] queryLocalModel - Choice content: ${choice.message.content || 'no content'}`)
+    const content = choice.message?.content || ''
+    const toolCalls = choice.message?.tool_calls || []
+
+    debugLog(`📝 [DEBUG] Generated content: ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`)
+    debugLog(`🔧 [DEBUG] Tool calls: ${toolCalls.length}`)
 
     const assistantMsg: AssistantMessage = {
       costUSD: 0,
@@ -639,7 +643,7 @@ export async function queryLocalModel(
         id: response.id || `local_${Date.now()}`,
         type: 'assistant',
         role: 'assistant',
-        content: choice.message.content ? [{ type: 'text', text: choice.message.content }] : [],
+        content: choice.message?.content ? [{ type: 'text', text: choice.message.content }] : [],
         model: options.model,
         stop_reason: choice.finish_reason || 'end_turn',
         stop_sequence: null,
@@ -650,29 +654,54 @@ export async function queryLocalModel(
       },
     }
 
-    debugLog(`✅ [DEBUG] queryLocalModel - Created assistant message successfully`)
-    debugLog(`✅ [DEBUG] queryLocalModel - Final message content: ${assistantMsg.message.content[0]?.text || 'no content'}`)
+    debugLog(`✅ [DEBUG] Created assistant message successfully`)
 
     // tool calls
-    if (choice.message.tool_calls?.length) {
-      debugLog(`🔧 [DEBUG] queryLocalModel - Processing ${choice.message.tool_calls.length} tool calls`)
+    if (choice.message?.tool_calls?.length) {
+      debugLog(`🔧 [DEBUG] Tool calls: ${choice.message.tool_calls.length}`)
+      debugLog(`🔧 [DEBUG] Tool calls from server:`, JSON.stringify(choice.message.tool_calls, null, 2))
+      
+      // 去重逻辑：使用 Set 来跟踪已处理的工具调用
+      const processedToolCalls = new Set<string>()
+      
       for (const tc of choice.message.tool_calls) {
+        // 创建工具调用的唯一标识符
+        const toolCallId = (tc as any).id || crypto.randomUUID()
+        const toolCallSignature = `${tc.function.name}:${JSON.stringify(tc.function.arguments)}`
+        
+        debugLog(`🔧 [DEBUG] Processing tool call: ${tc.function.name}`)
+        debugLog(`🔧 [DEBUG] Tool call signature: ${toolCallSignature}`)
+        debugLog(`🔧 [DEBUG] Already processed: ${processedToolCalls.has(toolCallSignature)}`)
+        
+        // 检查是否已经处理过相同的工具调用
+        if (processedToolCalls.has(toolCallSignature)) {
+          debugLog(`⚠️ [DEBUG] Skipping duplicate tool call: ${tc.function.name}`)
+          continue
+        }
+        
+        // 标记为已处理
+        processedToolCalls.add(toolCallSignature)
+        
         assistantMsg.message.content.push({
           type: 'tool_use',
-          id: (tc as any).id || crypto.randomUUID(),
+          id: toolCallId,
           name: tc.function.name,
           input: JSON.parse(tc.function.arguments),
         })
+        
+        debugLog(`✅ [DEBUG] Added tool call: ${tc.function.name}`)
       }
+    } else {
+      debugLog(`🔧 [DEBUG] No tool calls found in response`)
     }
 
     return assistantMsg
   } catch (error) {
     const durationMs = Date.now() - startTime
-    debugLog(`❌ [DEBUG] queryLocalModel - Error occurred after ${durationMs}ms`)
-    debugLog(`❌ [DEBUG] queryLocalModel - Error:`, error)
-    debugLog(`❌ [DEBUG] queryLocalModel - Error type:`, typeof error)
-    debugLog(`❌ [DEBUG] queryLocalModel - Error message:`, error instanceof Error ? error.message : String(error))
+    debugLog(`❌ [DEBUG] Local Model API call failed after ${durationMs}ms`)
+    debugLog(`❌ [DEBUG] Error:`, error)
+    debugLog(`❌ [DEBUG] Error type:`, typeof error)
+    debugLog(`❌ [DEBUG] Error message:`, error instanceof Error ? error.message : String(error))
     logError(error)
     return {
       costUSD: 0,

@@ -168,13 +168,48 @@ export function userMessageToMessageParam(
 export function assistantMessageToMessageParam(
   message: AssistantMessage,
 ): OpenAI.Chat.Completions.ChatCompletionMessageParam {
+  // 处理字符串内容
+  if (typeof message.message.content === 'string') {
+    return {
+      role: 'assistant',
+      content: message.message.content,
+    }
+  }
+
+  // 处理数组内容
+  if (Array.isArray(message.message.content)) {
+    // 检查是否有工具调用
+    const toolUses = message.message.content.filter((block: any) => block.type === 'tool_use')
+    if (toolUses.length > 0) {
+      return {
+        role: 'assistant',
+        content: null,
+        tool_calls: toolUses.map((toolUse: any) => ({
+          id: toolUse.id,
+          type: 'function',
+          function: {
+            name: toolUse.name,
+            arguments: JSON.stringify(toolUse.input),
+          },
+        })),
+      }
+    }
+
+    // 处理文本内容
+    const textContent = message.message.content
+      .filter((block: any) => block.type === 'text')
+      .map((block: any) => block.text)
+      .join('')
+
+    return {
+      role: 'assistant',
+      content: textContent,
+    }
+  }
+
   return {
     role: 'assistant',
-    content: typeof message.message.content === 'string' 
-      ? message.message.content 
-      : message.message.content.map(block => 
-          block.type === 'text' ? block.text : JSON.stringify(block)
-        ).join('\n'),
+    content: '',
   }
 }
 
@@ -234,14 +269,36 @@ export async function queryGPT(
     ? systemPrompt.join('\n')
     : systemPrompt.join('\n')
 
-  const toolSchemas = tools.map(t => ({
-    type: 'function' as const,
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.schema,
+  const toolSchemas = tools.map(tool => {
+    // 获取工具的schema - 工具可能使用inputSchema而不是schema
+    let schema = (tool as any).schema;
+    if (!schema && (tool as any).inputSchema) {
+      schema = (tool as any).inputSchema;
     }
-  }))
+    
+    // 如果schema是Zod schema，转换为JSON Schema
+    if (schema && typeof schema === 'object' && schema._def) {
+      schema = zodToJsonSchema(schema);
+    }
+    
+    // 处理description - 应该是字符串，如果工具定义中有description函数，使用默认描述
+    let description = '';
+    if (typeof tool.description === 'string') {
+      description = tool.description;
+    } else {
+      // 如果description是函数，使用工具名称作为默认描述
+      description = `Tool: ${tool.name}`;
+    }
+    
+    return {
+      type: 'function' as const,
+      function: {
+        name: tool.name,
+        description: description,
+        parameters: schema || { type: 'object', properties: {} }
+      }
+    };
+  })
   
   debugLog(`🛠️ [DEBUG] Tool schemas count: ${toolSchemas.length}`)
 
